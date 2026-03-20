@@ -3,6 +3,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const paymentRoutes = require('./routes/payments');
 const healthRoutes = require('./routes/health');
+const ghlRoutes = require('./routes/ghl');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,7 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/health', healthRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/ghl', ghlRoutes);
 
 // 404 handler
 app.use((req, res) => {
