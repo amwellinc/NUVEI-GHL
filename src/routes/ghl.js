@@ -1,7 +1,19 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const GHLClient = require('../services/ghlClient');
 const NuveiClient = require('../services/nuveiClient');
+
+// ─── GHL Custom Payment Provider checkout session store ───────────────────────
+// Sessions expire after 30 minutes
+const checkoutSessions = new Map();
+
+function cleanExpiredSessions() {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [id, s] of checkoutSessions) {
+    if (s.createdAt < cutoff) checkoutSessions.delete(id);
+  }
+}
 
 // Initialize GHL client
 const ghlClient = new GHLClient({
@@ -36,7 +48,7 @@ const validateGHLConfig = (req, res, next) => {
  * GET /api/ghl/status
  * Check integration status with GHL
  */
-router.get('/status', validateGHLConfig, async (req, res) => {
+router.get('/status', validateGHLConfig, async (_req, res) => {
   try {
     const locationData = await ghlClient.getLocation();
     
@@ -335,6 +347,201 @@ Updated: ${new Date().toISOString()}`;
       success: false,
       error: error.message
     });
+  }
+});
+
+// ─── GHL Custom Payment Provider endpoints ────────────────────────────────────
+
+/**
+ * POST /api/ghl/checkout
+ * GHL calls this when a customer reaches the payment step.
+ * Returns a paymentUrl to redirect the customer to our hosted payment form.
+ */
+router.post('/checkout', (req, res) => {
+  cleanExpiredSessions();
+
+  const {
+    amount, currency, description, orderId, contactId, locationId,
+    customer, successUrl, failureUrl, liveMode, uniqueId
+  } = req.body;
+
+  console.log(`[GHL Checkout] Order: ${orderId}, Amount: ${amount} ${currency || 'USD'}`);
+
+  const sessionId = crypto.randomUUID();
+  checkoutSessions.set(sessionId, {
+    amount,
+    currency: currency || 'USD',
+    description,
+    orderId,
+    contactId,
+    locationId,
+    customer,
+    successUrl,
+    failureUrl,
+    liveMode,
+    uniqueId,
+    status: 'pending',
+    transactionId: null,
+    createdAt: Date.now()
+  });
+
+  const appUrl = process.env.APP_URL || 'https://am333-nuvei-ghl-production.up.railway.app';
+  res.json({ status: 'new', paymentUrl: `${appUrl}/api/ghl/pay/${sessionId}` });
+});
+
+/**
+ * GET /api/ghl/query/:transactionId
+ * GHL calls this to verify payment status after redirect.
+ */
+router.get('/query/:transactionId', (_req, res) => {
+  const { transactionId } = _req.params;
+  for (const [, session] of checkoutSessions) {
+    if (session.transactionId === transactionId) {
+      return res.json({ status: session.status, transactionId });
+    }
+  }
+  res.status(404).json({ status: 'not_found', transactionId });
+});
+
+/**
+ * GET /pay/:sessionId
+ * Hosted payment form served to the customer.
+ * (Mounted at /pay in server.js)
+ */
+router.get('/pay/:sessionId', (req, res) => {
+  const session = checkoutSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:60px">Payment session not found or expired.<br><br><a href="javascript:history.back()">Go back</a></h2>');
+  }
+
+  const amount = parseFloat(session.amount).toFixed(2);
+  const currency = session.currency || 'USD';
+  const description = session.description || 'Order Payment';
+  const customerName = session.customer?.name || '';
+  const customerEmail = session.customer?.email || '';
+  const appUrl = process.env.APP_URL || 'https://am333-nuvei-ghl-production.up.railway.app';
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Secure Payment — NUVEI-Payments</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.10);max-width:460px;width:100%;padding:36px}
+    .logo{text-align:center;margin-bottom:24px}
+    .logo h1{font-size:22px;color:#1a1a2e;font-weight:700}
+    .logo span{color:#7c3aed}
+    .summary{background:#f8f7ff;border-radius:8px;padding:14px 18px;margin-bottom:24px}
+    .summary p{font-size:13px;color:#666;margin-bottom:4px}
+    .summary .amount{font-size:26px;font-weight:700;color:#1a1a2e}
+    .summary .desc{font-size:13px;color:#888;margin-top:4px}
+    label{display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;margin-top:16px}
+    input{width:100%;padding:11px 14px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:15px;transition:border .2s;outline:none}
+    input:focus{border-color:#7c3aed}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .btn{width:100%;margin-top:24px;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:background .2s}
+    .btn:hover{background:#6d28d9}
+    .btn:disabled{background:#a78bfa;cursor:not-allowed}
+    .secure{text-align:center;margin-top:14px;font-size:12px;color:#9ca3af}
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo"><h1>NUVEI<span>-Payments</span></h1></div>
+  <div class="summary">
+    <p>Order Total</p>
+    <div class="amount">${currency} ${amount}</div>
+    <div class="desc">${description}</div>
+  </div>
+  <form id="pf" method="POST" action="${appUrl}/api/ghl/pay/${req.params.sessionId}/process">
+    <label>Cardholder Name</label>
+    <input type="text" name="cardName" value="${customerName}" placeholder="Name on card" required/>
+    <label>Card Number</label>
+    <input type="text" name="ccNumber" placeholder="1234 5678 9012 3456" maxlength="19" required inputmode="numeric"/>
+    <div class="row">
+      <div><label>Expiry Month</label><input type="text" name="ccExpMonth" placeholder="MM" maxlength="2" required inputmode="numeric"/></div>
+      <div><label>Expiry Year</label><input type="text" name="ccExpYear" placeholder="YYYY" maxlength="4" required inputmode="numeric"/></div>
+    </div>
+    <label>CVV</label>
+    <input type="text" name="ccCvv" placeholder="123" maxlength="4" required inputmode="numeric"/>
+    <input type="hidden" name="email" value="${customerEmail}"/>
+    <button type="submit" class="btn" id="pb">Pay ${currency} ${amount}</button>
+  </form>
+  <p class="secure">🔒 256-bit SSL Encrypted &amp; Secure</p>
+</div>
+<script>
+  document.querySelector('[name=ccNumber]').addEventListener('input',function(){
+    this.value=this.value.replace(/\D/g,'').replace(/(.{4})/g,'$1 ').trim();
+  });
+  document.getElementById('pf').addEventListener('submit',function(){
+    document.querySelector('[name=ccNumber]').value=document.querySelector('[name=ccNumber]').value.replace(/\s/g,'');
+    document.getElementById('pb').disabled=true;
+    document.getElementById('pb').textContent='Processing...';
+  });
+</script>
+</body>
+</html>`);
+});
+
+/**
+ * POST /pay/:sessionId/process
+ * Handles card submission from the hosted payment form.
+ * (Mounted at /pay in server.js)
+ */
+router.post('/pay/:sessionId/process', async (req, res) => {
+  const session = checkoutSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:60px">Session expired. Please go back and retry.</h2>');
+  }
+
+  const { ccNumber, ccExpMonth, ccExpYear, ccCvv, cardName, email } = req.body;
+  const nameParts = (cardName || session.customer?.name || 'Customer').trim().split(' ');
+  const firstName = nameParts[0] || 'Customer';
+  const lastName = nameParts.slice(1).join(' ') || 'N/A';
+
+  const nuvei = new NuveiClient({
+    merchantId: process.env.NUVEI_MERCHANT_ID,
+    secretKey: process.env.NUVEI_SECRET_KEY,
+    apiEndpoint: process.env.NUVEI_API_ENDPOINT || 'https://secure.safecharge.com/api/v1',
+    sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true',
+    sdkUsername: process.env.NUVEI_SDK_USERNAME,
+    sdkPassword: process.env.NUVEI_SDK_PASSWORD,
+    sdkKey: process.env.NUVEI_SDK_KEY
+  });
+
+  try {
+    const response = await nuvei.createPayment({
+      amount: session.amount,
+      currency: session.currency,
+      clientUniqueId: session.uniqueId || session.orderId || `ghl-${Date.now()}`,
+      firstName,
+      lastName,
+      email: email || session.customer?.email || '',
+      phone: session.customer?.phone || '',
+      description: session.description,
+      ccNumber: ccNumber.replace(/\s/g, ''),
+      ccExpMonth,
+      ccExpYear,
+      ccCvv
+    });
+
+    const transactionId = response.transactionId || response.gwTransactionId || response.ppTransactionID || `txn-${Date.now()}`;
+    session.status = 'success';
+    session.transactionId = transactionId;
+    checkoutSessions.set(req.params.sessionId, session);
+
+    console.log(`[GHL Checkout] Success. Order: ${session.orderId}, TxnID: ${transactionId}`);
+
+    const base = session.successUrl || '/';
+    res.redirect(base.includes('?') ? `${base}&transactionId=${transactionId}` : `${base}?transactionId=${transactionId}`);
+  } catch (error) {
+    session.status = 'failed';
+    checkoutSessions.set(req.params.sessionId, session);
+    console.error(`[GHL Checkout] Failed. Order: ${session.orderId}`, error.message);
+    res.redirect(session.failureUrl || '/');
   }
 });
 
