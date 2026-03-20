@@ -2,20 +2,27 @@ const express = require('express');
 const router = express.Router();
 const NuveiClient = require('../services/nuveiClient');
 
-// Initialize NUVEI client
+// Initialize NUVEI client - supports both traditional and SDK auth
 const nuveiClient = new NuveiClient({
   merchantId: process.env.NUVEI_MERCHANT_ID,
   secretKey: process.env.NUVEI_SECRET_KEY,
   apiEndpoint: process.env.NUVEI_API_ENDPOINT || 'https://secure.safecharge.com/api/v1',
-  sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true'
+  sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true',
+  // SDK credentials (alternative authentication)
+  sdkUsername: process.env.NUVEI_SDK_USERNAME,
+  sdkPassword: process.env.NUVEI_SDK_PASSWORD,
+  sdkKey: process.env.NUVEI_SDK_KEY
 });
 
 // Middleware to validate NUVEI credentials
 const validateNuveiConfig = (req, res, next) => {
-  if (!process.env.NUVEI_MERCHANT_ID || !process.env.NUVEI_SECRET_KEY) {
+  const hasTraditionalAuth = process.env.NUVEI_MERCHANT_ID && process.env.NUVEI_SECRET_KEY;
+  const hasSDKAuth = process.env.NUVEI_SDK_USERNAME && process.env.NUVEI_SDK_PASSWORD && process.env.NUVEI_SDK_KEY;
+  
+  if (!hasTraditionalAuth && !hasSDKAuth) {
     return res.status(500).json({
       error: 'NUVEI credentials not configured',
-      message: 'NUVEI_MERCHANT_ID and NUVEI_SECRET_KEY environment variables must be set'
+      message: 'Either (NUVEI_MERCHANT_ID + NUVEI_SECRET_KEY) or (NUVEI_SDK_USERNAME + NUVEI_SDK_PASSWORD + NUVEI_SDK_KEY) must be set'
     });
   }
   next();

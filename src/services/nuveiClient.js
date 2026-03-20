@@ -3,14 +3,32 @@ const axios = require('axios');
 
 class NuveiClient {
   constructor(config) {
+    // Support both traditional API auth and SDK auth
     this.merchantId = config.merchantId;
     this.secretKey = config.secretKey;
     this.apiEndpoint = config.apiEndpoint || 'https://secure.safecharge.com/api/v1';
     this.sandboxMode = config.sandboxMode || false;
+    
+    // SDK authentication (alternative method)
+    this.sdkUsername = config.sdkUsername;
+    this.sdkPassword = config.sdkPassword;
+    this.sdkKey = config.sdkKey;
+    
+    // Determine auth method
+    this.useSDKAuth = !!(this.sdkUsername && this.sdkPassword && this.sdkKey);
+    
+    if (!this.merchantId && !this.useSDKAuth) {
+      throw new Error('NUVEI configuration error: Either provide merchantId + secretKey or SDK credentials');
+    }
   }
 
   /**
    * Generate authentication hash for NUVEI API
+   * @param {Object} parameters - Request parameters
+   * @returns {string} - Calculated checksum
+   */
+  /**
+   * Calculate checksum for traditional API authentication
    * @param {Object} parameters - Request parameters
    * @returns {string} - Calculated checksum
    */
@@ -38,18 +56,32 @@ class NuveiClient {
    */
   async makeRequest(endpoint, payload) {
     try {
-      const requestPayload = {
-        merchantId: this.merchantId,
-        ...payload,
-        checksumforapilogin: this.calculateChecksum({
-          merchantId: this.merchantId,
+      let requestPayload;
+      
+      if (this.useSDKAuth) {
+        // SDK-based authentication
+        requestPayload = {
+          username: this.sdkUsername,
+          password: this.sdkPassword,
           ...payload
-        })
-      };
+        };
+        // Add SDK key to headers if needed
+      } else {
+        // Traditional API authentication
+        requestPayload = {
+          merchantId: this.merchantId,
+          ...payload,
+          checksumforapilogin: this.calculateChecksum({
+            merchantId: this.merchantId,
+            ...payload
+          })
+        };
+      }
 
       const response = await axios.post(`${this.apiEndpoint}${endpoint}`, requestPayload, {
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-API-VERSION': '1.0'
         },
         timeout: 30000
       });

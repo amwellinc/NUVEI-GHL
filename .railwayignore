@@ -1,0 +1,8 @@
+.git
+.gitignore
+README.md
+.github
+.vscode
+tests
+coverage
+.env.example
