@@ -386,7 +386,7 @@ router.post('/checkout', (req, res) => {
   });
 
   const appUrl = process.env.APP_URL || 'https://am333-nuvei-production.up.railway.app';
-  res.json({ status: 'new', paymentUrl: `${appUrl}/api/ghl/pay/${sessionId}` });
+  res.json({ status: 'new', paymentUrl: `${appUrl}/pay/${sessionId}` });
 });
 
 /**
@@ -456,7 +456,7 @@ router.get('/pay/:sessionId', (req, res) => {
     <div class="amount">${currency} ${amount}</div>
     <div class="desc">${description}</div>
   </div>
-  <form id="pf" method="POST" action="${appUrl}/api/ghl/pay/${req.params.sessionId}/process">
+  <form id="pf" method="POST" action="${appUrl}/pay/${req.params.sessionId}/process">
     <label>Cardholder Name</label>
     <input type="text" name="cardName" value="${customerName}" placeholder="Name on card" required/>
     <label>Card Number</label>
