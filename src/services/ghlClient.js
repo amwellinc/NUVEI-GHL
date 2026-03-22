@@ -4,7 +4,8 @@ class GHLClient {
   constructor(config) {
     this.locationId = config.locationId;
     this.apiToken = config.apiToken;
-    this.apiEndpoint = config.apiEndpoint || 'https://rest.gohighlevel.com/v1';
+    // v2 API endpoint for Custom App / Private Integration
+    this.apiEndpoint = config.apiEndpoint || 'https://services.leadconnectorhq.com';
   }
 
   /**
@@ -22,7 +23,8 @@ class GHLClient {
         headers: {
           'Authorization': `Bearer ${this.apiToken}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Version': '2021-07-28'
         },
         timeout: 30000
       };
@@ -93,61 +95,53 @@ class GHLClient {
   }
 
   /**
-   * Get contacts for a location
+   * Get contacts for a location (v2 API)
    * @param {Object} filters - Filter options
    * @returns {Promise<Object>} - List of contacts
    */
   async getContacts(filters = {}) {
-    let url = `/locations/${this.locationId}/contacts`;
-    
-    if (Object.keys(filters).length > 0) {
-      const queryParams = new URLSearchParams(filters).toString();
-      url += `?${queryParams}`;
-    }
-
-    return this.makeRequest('GET', url);
+    const params = new URLSearchParams({ locationId: this.locationId, ...filters });
+    return this.makeRequest('GET', `/contacts/?${params.toString()}`);
   }
 
   /**
-   * Update contact with payment information
+   * Update contact with payment information (v2 API)
    * @param {string} contactId - Contact ID
    * @param {Object} updateData - Data to update
    * @returns {Promise<Object>} - Updated contact
    */
   async updateContact(contactId, updateData) {
-    return this.makeRequest('PUT', `/locations/${this.locationId}/contacts/${contactId}`, updateData);
+    return this.makeRequest('PUT', `/contacts/${contactId}`, updateData);
   }
 
   /**
-   * Create a note for contact (payment record)
+   * Create a note for contact (payment record) (v2 API)
    * @param {string} contactId - Contact ID
    * @param {Object} noteData - Note information
    * @returns {Promise<Object>} - Created note
    */
   async createNote(contactId, noteData) {
-    return this.makeRequest('POST', `/locations/${this.locationId}/contacts/${contactId}/notes`, {
+    return this.makeRequest('POST', `/contacts/${contactId}/notes`, {
       body: noteData.body,
-      type: noteData.type || 'general'
+      userId: process.env.GHL_USER_ID || ''
     });
   }
 
   /**
-   * Create a custom value for a contact
+   * Set a custom field value on a contact (v2 API)
    * @param {string} contactId - Contact ID
-   * @param {string} fieldName - Custom field name
+   * @param {string} fieldKey - Custom field key
    * @param {string} value - Field value
    * @returns {Promise<Object>} - Updated contact
    */
-  async setCustomField(contactId, fieldName, value) {
-    return this.makeRequest('PUT', `/locations/${this.locationId}/contacts/${contactId}`, {
-      customFields: {
-        [fieldName]: value
-      }
+  async setCustomField(contactId, fieldKey, value) {
+    return this.makeRequest('PUT', `/contacts/${contactId}`, {
+      customFields: [{ key: fieldKey, field_value: value }]
     });
   }
 
   /**
-   * Get webhooks for location
+   * Get webhooks for location (v2 API)
    * @returns {Promise<Object>} - List of webhooks
    */
   async getWebhooks() {
@@ -155,7 +149,7 @@ class GHLClient {
   }
 
   /**
-   * Register a webhook for payment events
+   * Register a webhook for payment events (v2 API)
    * @param {Object} webhookData - Webhook configuration
    * @returns {Promise<Object>} - Created webhook
    */

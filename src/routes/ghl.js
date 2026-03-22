@@ -15,11 +15,11 @@ function cleanExpiredSessions() {
   }
 }
 
-// Initialize GHL client
+// Initialize GHL client (v2 Custom App / Private Integration)
 const ghlClient = new GHLClient({
   locationId: process.env.GHL_LOCATION_ID,
   apiToken: process.env.GHL_API_TOKEN,
-  apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://rest.gohighlevel.com/v1'
+  apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://services.leadconnectorhq.com'
 });
 
 // Initialize NUVEI client
@@ -285,7 +285,7 @@ router.get('/contacts/:contactId', validateGHLConfig, async (req, res) => {
       });
     }
 
-    const contactData = await ghlClient.makeRequest('GET', `/locations/${process.env.GHL_LOCATION_ID}/contacts/${contactId}`);
+    const contactData = await ghlClient.makeRequest('GET', `/contacts/${contactId}`);
 
     res.status(200).json({
       success: true,
@@ -385,7 +385,7 @@ router.post('/checkout', (req, res) => {
     createdAt: Date.now()
   });
 
-  const appUrl = process.env.APP_URL || 'https://am333-nuvei-ghl-production.up.railway.app';
+  const appUrl = process.env.APP_URL || 'https://am333-nuvei-production.up.railway.app';
   res.json({ status: 'new', paymentUrl: `${appUrl}/api/ghl/pay/${sessionId}` });
 });
 
@@ -419,7 +419,7 @@ router.get('/pay/:sessionId', (req, res) => {
   const description = session.description || 'Order Payment';
   const customerName = session.customer?.name || '';
   const customerEmail = session.customer?.email || '';
-  const appUrl = process.env.APP_URL || 'https://am333-nuvei-ghl-production.up.railway.app';
+  const appUrl = process.env.APP_URL || 'https://am333-nuvei-production.up.railway.app';
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
