@@ -5,75 +5,61 @@ const axios = require('axios');
 
 const NuveiClient = require('./nuveiClient');
 
-const baseConfig = {
-  merchantId: 'merchant-1',
-  merchantSiteId: 'site-1',
-  secretKey: 'shh-secret'
+const config = {
+  username: 'testuser',
+  password: 'testpass',
+  securityKey: '64E9257352B95186DC86E598ECB97F5D49FB04D58F974051'
 };
 
-describe('NuveiClient#calculateChecksum', () => {
-  test('hashes ordered fields with secretKey appended, matching Nuvei\'s documented formula', () => {
-    const client = new NuveiClient(baseConfig);
-    const fields = ['merchant-1', 'site-1', 'req-1', '10.00', 'USD', '20260829120000'];
+function encryptForTest(client, obj) {
+  return client.encrypt(JSON.stringify(obj));
+}
 
-    const expected = crypto
-      .createHash('sha256')
-      .update(fields.join('') + baseConfig.secretKey)
-      .digest('hex');
+function gatewayResponse(client, obj) {
+  return { status: 200, data: client.encrypt(JSON.stringify(obj)) };
+}
 
-    expect(client.calculateChecksum(fields)).toBe(expected);
+describe('NuveiClient encryption (Triple DES / DES-EDE3 ECB)', () => {
+  test('round-trips a payload through encrypt then decrypt', () => {
+    const client = new NuveiClient(config);
+    const plaintext = JSON.stringify({ PING: 'Ping Ping' });
+    expect(client.decrypt(client.encrypt(plaintext))).toBe(plaintext);
   });
 
-  test('treats null/undefined fields as empty strings rather than the literal text', () => {
-    const client = new NuveiClient(baseConfig);
-    const withNulls = client.calculateChecksum(['a', null, undefined, 'b']);
-    const withEmpties = client.calculateChecksum(['a', '', '', 'b']);
-    expect(withNulls).toBe(withEmpties);
-  });
-});
-
-describe('NuveiClient#generateTimeStamp', () => {
-  test('returns a 14-digit YYYYMMDDHHmmss string', () => {
-    const client = new NuveiClient(baseConfig);
-    expect(client.generateTimeStamp()).toMatch(/^\d{14}$/);
-  });
-});
-
-describe('NuveiClient host selection', () => {
-  test('defaults to the sandbox host when sandboxMode is not explicitly false', () => {
-    const client = new NuveiClient(baseConfig);
-    expect(client.apiEndpoint).toBe('https://ppp-test.nuvei.com/ppp/api/v1');
+  test('the derived cipher key is exactly 24 bytes, as DES-EDE3 requires', () => {
+    const client = new NuveiClient(config);
+    expect(client.cipherKey.length).toBe(24);
   });
 
-  test('uses the production host when sandboxMode is false', () => {
-    const client = new NuveiClient({ ...baseConfig, sandboxMode: false });
-    expect(client.apiEndpoint).toBe('https://secure.safecharge.com/ppp/api/v1');
-  });
+  test('output is hex-encoded ciphertext, decryptable independently via Node crypto with the same key', () => {
+    const client = new NuveiClient(config);
+    const encrypted = client.encrypt('{"a":1}');
+    expect(encrypted).toMatch(/^[0-9a-f]+$/);
 
-  test('respects an explicit apiEndpoint override', () => {
-    const client = new NuveiClient({ ...baseConfig, apiEndpoint: 'https://custom.example.com/api' });
-    expect(client.apiEndpoint).toBe('https://custom.example.com/api');
+    const decipher = crypto.createDecipheriv('des-ede3', client.cipherKey, '');
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(encrypted, 'hex')), decipher.final()]);
+    expect(decrypted.toString('utf8')).toBe('{"a":1}');
   });
 });
 
 describe('NuveiClient#assertConfigured', () => {
-  test('does not throw when merchantId, merchantSiteId, and secretKey are all present', () => {
-    const client = new NuveiClient(baseConfig);
+  test('does not throw when username, password, and securityKey are all present', () => {
+    const client = new NuveiClient(config);
     expect(() => client.assertConfigured()).not.toThrow();
   });
 
   test.each([
-    ['merchantId', { ...baseConfig, merchantId: undefined }],
-    ['merchantSiteId', { ...baseConfig, merchantSiteId: undefined }],
-    ['secretKey', { ...baseConfig, secretKey: undefined }]
-  ])('throws a 500-shaped error when %s is missing', (_field, config) => {
-    const client = new NuveiClient(config);
+    ['username', { ...config, username: undefined }],
+    ['password', { ...config, password: undefined }],
+    ['securityKey', { ...config, securityKey: undefined }]
+  ])('throws a 500-shaped error when %s is missing (all three are required together)', (_field, badConfig) => {
+    const client = new NuveiClient(badConfig);
     expect.assertions(2);
     try {
       client.assertConfigured();
     } catch (err) {
       expect(err.statusCode).toBe(500);
-      expect(err.message).toMatch(/merchantId, merchantSiteId, and secretKey/);
+      expect(err.message).toMatch(/username, password, and securityKey/);
     }
   });
 
@@ -82,75 +68,185 @@ describe('NuveiClient#assertConfigured', () => {
   });
 });
 
-describe('NuveiClient request flow (network mocked)', () => {
+describe('NuveiClient host selection', () => {
+  test('defaults to the sandbox host', () => {
+    const client = new NuveiClient(config);
+    expect(client.apiEndpoint).toBe('https://gateway.basecommercesandbox.com');
+  });
+
+  test('uses the production host when production: true', () => {
+    const client = new NuveiClient({ ...config, production: true });
+    expect(client.apiEndpoint).toBe('https://gateway.basecommerce.com');
+  });
+
+  test('respects an explicit apiEndpoint override', () => {
+    const client = new NuveiClient({ ...config, apiEndpoint: 'https://custom.example.com' });
+    expect(client.apiEndpoint).toBe('https://custom.example.com');
+  });
+});
+
+describe('NuveiClient#post (network mocked)', () => {
   afterEach(() => jest.clearAllMocks());
 
-  test('createPayment fetches a session token before calling /payment, and both calls carry a checksum', async () => {
-    axios.post
-      .mockResolvedValueOnce({ data: { sessionToken: 'session-abc' } })
-      .mockResolvedValueOnce({ data: { transactionId: 'txn-1', status: 'APPROVED' } });
+  test('sends gateway_username/gateway_password and an encrypted payload, decrypts the response', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, { success: 'success' }));
 
-    const client = new NuveiClient(baseConfig);
+    const result = await client.post('/pcms/?f=API_PingPong', { PING: 'Ping Ping' });
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    const [url, body, options] = axios.post.mock.calls[0];
+    expect(url).toBe('https://gateway.basecommercesandbox.com/pcms/?f=API_PingPong');
+    expect(body.gateway_username).toBe('testuser');
+    expect(body.gateway_password).toBe('testpass');
+    expect(body.payload).toMatch(/^[0-9a-f]+$/);
+    expect(options.headers['Content-Type']).toBe('application/json');
+
+    expect(result).toEqual({ success: 'success' });
+  });
+
+  test('a call made without full credentials rejects with a clean 500 instead of throwing synchronously', async () => {
+    const client = new NuveiClient({ username: 'onlyusername' });
+    await expect(client.post('/x', {})).rejects.toMatchObject({ statusCode: 500 });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('maps HTTP 403 to a 401 invalid-credentials error', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce({ status: 403, data: '' });
+    await expect(client.post('/x', {})).rejects.toMatchObject({ statusCode: 401, message: 'Invalid BaseCommerce credentials' });
+  });
+
+  test('surfaces a non-200/403/404 gateway status as a 502 without crashing on a non-decryptable body', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce({ status: 500, data: '<html>Base Commerce error page</html>' });
+    await expect(client.post('/x', {})).rejects.toMatchObject({ statusCode: 502 });
+  });
+
+  test('throws a 402 when the gateway returns an "exception" object', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, { exception: { bank_card_transaction_card_cvv2: 'CVV Required' } }));
+    await expect(client.post('/x', {})).rejects.toMatchObject({ statusCode: 402, message: 'CVV Required' });
+  });
+});
+
+describe('NuveiClient#createPayment', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  test('builds a SALE with bank_card_transaction_* fields including card_cvv2, and returns the parsed result on approval', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, {
+      bank_card_transaction: {
+        bank_card_transaction_id: 171808311,
+        bank_card_transaction_status: { bank_card_transaction_status_name: 'CAPTURED' },
+        bank_card_transaction_response_code: '100'
+      }
+    }));
+
     const result = await client.createPayment({
-      amount: 10,
-      currency: 'USD',
-      firstName: 'Jane',
-      lastName: 'Doe',
-      email: 'jane@example.com',
+      amount: 1,
+      firstName: 'Test',
+      lastName: 'Verify',
       ccNumber: '4111111111111111',
       ccExpMonth: '12',
       ccExpYear: '2027',
-      ccCvv: '123'
+      ccCvv: '123',
+      billingAddress: { city: 'Tustin', state: 'CA', zip: '92780', country: 'US' }
     });
 
-    expect(axios.post).toHaveBeenCalledTimes(2);
+    const [, body] = axios.post.mock.calls[0];
+    const sent = JSON.parse(client.decrypt(body.payload));
+    expect(sent.bank_card_transaction_name).toBe('Test Verify');
+    expect(sent.bank_card_transaction_card_number).toBe('4111111111111111');
+    expect(sent.bank_card_transaction_expiration_month).toBe('12');
+    expect(sent.bank_card_transaction_expiration_year).toBe('2027');
+    expect(sent.bank_card_transaction_card_cvv2).toBe('123');
+    expect(sent.bank_card_transaction_type).toBe('SALE');
+    expect(sent.bank_card_transaction_amount).toBe('1.00');
+    expect(sent.bank_card_transaction_billing_address).toEqual({
+      address_name: 'Test Verify',
+      address_city: 'Tustin',
+      address_state: 'CA',
+      address_zipcode: '92780',
+      address_country: 'US'
+    });
 
-    const [sessionUrl, sessionPayload] = axios.post.mock.calls[0];
-    expect(sessionUrl).toBe('https://ppp-test.nuvei.com/ppp/api/v1/getSessionToken');
-    expect(sessionPayload.checksum).toEqual(expect.any(String));
-    expect(sessionPayload.merchantId).toBe('merchant-1');
-    expect(sessionPayload.merchantSiteId).toBe('site-1');
-
-    const [paymentUrl, paymentPayload] = axios.post.mock.calls[1];
-    expect(paymentUrl).toBe('https://ppp-test.nuvei.com/ppp/api/v1/payment');
-    expect(paymentPayload.sessionToken).toBe('session-abc');
-    expect(paymentPayload.amount).toBe('10.00');
-    expect(paymentPayload.paymentOption.card.cardNumber).toBe('4111111111111111');
-    expect(paymentPayload.checksum).toEqual(expect.any(String));
-
-    expect(result).toEqual({ transactionId: 'txn-1', status: 'APPROVED' });
+    expect(result).toEqual({
+      transactionId: 171808311,
+      status: 'CAPTURED',
+      responseCode: '100',
+      raw: expect.any(Object)
+    });
   });
 
-  test('createPayment surfaces a clear error when session token acquisition fails to return a token', async () => {
-    axios.post.mockResolvedValueOnce({ data: { errorCode: 1, reason: 'Invalid merchant' } });
+  test('rejects with a 402 and the decline reason on a DECLINED transaction', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, {
+      bank_card_transaction: {
+        bank_card_transaction_id: 171808295,
+        bank_card_transaction_status: { bank_card_transaction_status_name: 'DECLINED' },
+        bank_card_transaction_response_code: '2006',
+        bank_card_transaction_response_message: 'No such Issuer'
+      }
+    }));
 
-    const client = new NuveiClient(baseConfig);
     await expect(
-      client.createPayment({ amount: 10, currency: 'USD', email: 'a@b.com' })
-    ).rejects.toMatchObject({ statusCode: 502 });
-
-    expect(axios.post).toHaveBeenCalledTimes(1);
+      client.createPayment({
+        amount: 1, firstName: 'A', lastName: 'B',
+        ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+      })
+    ).rejects.toMatchObject({ statusCode: 402, message: 'No such Issuer' });
   });
+});
 
-  test('refundPayment posts relatedTransactionId and a checksum without a prior session call', async () => {
-    axios.post.mockResolvedValueOnce({ data: { status: 'SUCCESS' } });
+describe('NuveiClient#refundPayment', () => {
+  afterEach(() => jest.clearAllMocks());
 
-    const client = new NuveiClient(baseConfig);
-    await client.refundPayment({ transactionId: 'txn-1', amount: 5, currency: 'USD' });
+  test('posts bank_card_transaction_id/amount/type=REFUND', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, {
+      bank_card_transaction: {
+        bank_card_transaction_id: 999,
+        bank_card_transaction_status: { bank_card_transaction_status_name: 'SETTLED' }
+      }
+    }));
 
-    expect(axios.post).toHaveBeenCalledTimes(1);
-    const [url, payload] = axios.post.mock.calls[0];
-    expect(url).toBe('https://ppp-test.nuvei.com/ppp/api/v1/refundTransaction');
-    expect(payload.relatedTransactionId).toBe('txn-1');
-    expect(payload.amount).toBe('5.00');
-    expect(payload.checksum).toEqual(expect.any(String));
+    const result = await client.refundPayment({ transactionId: '123', amount: 5 });
+    const [, body] = axios.post.mock.calls[0];
+    const sent = JSON.parse(client.decrypt(body.payload));
+
+    expect(sent.bank_card_transaction_id).toBe('123');
+    expect(sent.bank_card_transaction_amount).toBe('5.00');
+    expect(sent.bank_card_transaction_type).toBe('REFUND');
+    expect(result.transactionId).toBe(999);
   });
+});
 
-  test('a request made without full credentials rejects with a clean 500 instead of throwing synchronously', async () => {
-    const client = new NuveiClient({ merchantId: 'merchant-1' });
-    await expect(client.refundPayment({ transactionId: 'txn-1', amount: 5, currency: 'USD' })).rejects.toMatchObject({
-      statusCode: 500
-    });
-    expect(axios.post).not.toHaveBeenCalled();
+describe('NuveiClient#voidPayment', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  test('posts bank_card_transaction_id/type=VOID with no amount', async () => {
+    const client = new NuveiClient(config);
+    axios.post.mockResolvedValueOnce(gatewayResponse(client, {
+      bank_card_transaction: {
+        bank_card_transaction_id: 456,
+        bank_card_transaction_status: { bank_card_transaction_status_name: 'VOIDED' }
+      }
+    }));
+
+    await client.voidPayment({ transactionId: '456' });
+    const [, body] = axios.post.mock.calls[0];
+    const sent = JSON.parse(client.decrypt(body.payload));
+
+    expect(sent.bank_card_transaction_id).toBe('456');
+    expect(sent.bank_card_transaction_type).toBe('VOID');
+    expect(sent.bank_card_transaction_amount).toBeUndefined();
+  });
+});
+
+describe('NuveiClient#getPaymentDetails', () => {
+  test('is explicitly not implemented — no lookup endpoint was confirmed', async () => {
+    const client = new NuveiClient(config);
+    await expect(client.getPaymentDetails('123')).rejects.toMatchObject({ statusCode: 501 });
   });
 });

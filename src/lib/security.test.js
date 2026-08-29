@@ -19,26 +19,49 @@ describe('escapeHtml', () => {
 });
 
 describe('redactErrorDetails', () => {
-  test('keeps only the known-safe fields, dropping anything else including echoed input', () => {
+  test('drops keys that look like they carry card data or credentials, recursively, keeping everything else', () => {
     const raw = {
       errorCode: 1021,
       reason: 'Invalid card number',
       status: 'ERROR',
       ccNumber: '4111111111111111',
-      rawRequestEcho: { ccCvv: '123' }
+      cardNumber: '4111111111111111',
+      bank_card_transaction_card_cvv2: '123',
+      rawRequestEcho: { ccCvv: '123', securityKey: 'shh', nested: { apiKey: 'shh2' } }
     };
     expect(redactErrorDetails(raw)).toEqual({
       errorCode: 1021,
       reason: 'Invalid card number',
       status: 'ERROR',
-      gwErrorCode: undefined,
-      gwErrorReason: undefined
+      rawRequestEcho: { nested: {} }
     });
   });
 
-  test('returns undefined for non-object input', () => {
+  test('preserves gateway-specific fields that are not sensitive (e.g. BaseCommerce response fields)', () => {
+    const raw = {
+      bank_card_transaction_id: 171808311,
+      bank_card_transaction_response_code: '2006',
+      bank_card_transaction_response_message: 'No such Issuer',
+      bank_card_transaction_masked_full_bin_card_number: '411111******1111'
+    };
+    // The masked-card-number field's name still matches the "card number"
+    // pattern and gets dropped even though its value is already masked —
+    // acceptable false positive, favoring safety over completeness.
+    expect(redactErrorDetails(raw)).toEqual({
+      bank_card_transaction_id: 171808311,
+      bank_card_transaction_response_code: '2006',
+      bank_card_transaction_response_message: 'No such Issuer'
+    });
+  });
+
+  test('passes non-object input through unchanged rather than throwing', () => {
     expect(redactErrorDetails(undefined)).toBeUndefined();
-    expect(redactErrorDetails('a string')).toBeUndefined();
+    expect(redactErrorDetails('a string')).toBe('a string');
+    expect(redactErrorDetails(42)).toBe(42);
+  });
+
+  test('handles arrays by redacting each element', () => {
+    expect(redactErrorDetails([{ password: 'x', ok: 1 }])).toEqual([{ ok: 1 }]);
   });
 });
 

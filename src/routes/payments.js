@@ -5,23 +5,23 @@ const { redactErrorDetails, createRateLimiter } = require('../lib/security');
 
 const paymentRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 
-// Initialize NUVEI client (REST 1.0 checksum-based auth)
+// Initialize NUVEI client (BaseCommerce/BaseX — username+password+securityKey auth)
 const nuveiClient = new NuveiClient({
-  merchantId: process.env.NUVEI_MERCHANT_ID,
-  merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
-  secretKey: process.env.NUVEI_SECRET_KEY,
-  apiEndpoint: process.env.NUVEI_API_ENDPOINT,
-  sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
+  username: process.env.NUVEI_SDK_USERNAME,
+  password: process.env.NUVEI_SDK_PASSWORD,
+  securityKey: process.env.NUVEI_SDK_KEY,
+  production: process.env.NUVEI_SANDBOX_MODE !== 'true',
+  apiEndpoint: process.env.NUVEI_API_ENDPOINT
 });
 
 // Middleware to validate NUVEI credentials
 const validateNuveiConfig = (req, res, next) => {
-  const hasAuth = process.env.NUVEI_MERCHANT_ID && process.env.NUVEI_MERCHANT_SITE_ID && process.env.NUVEI_SECRET_KEY;
+  const hasAuth = process.env.NUVEI_SDK_USERNAME && process.env.NUVEI_SDK_PASSWORD && process.env.NUVEI_SDK_KEY;
 
   if (!hasAuth) {
     return res.status(500).json({
       error: 'NUVEI credentials not configured',
-      message: 'NUVEI_MERCHANT_ID, NUVEI_MERCHANT_SITE_ID, and NUVEI_SECRET_KEY must all be set'
+      message: 'NUVEI_SDK_USERNAME, NUVEI_SDK_PASSWORD, and NUVEI_SDK_KEY must all be set'
     });
   }
   next();

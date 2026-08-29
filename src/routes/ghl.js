@@ -46,13 +46,13 @@ const ghlClient = new GHLClient({
   apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://services.leadconnectorhq.com'
 });
 
-// Initialize NUVEI client (REST 1.0 checksum-based auth)
+// Initialize NUVEI client (BaseCommerce/BaseX — username+password+securityKey auth)
 const nuveiClient = new NuveiClient({
-  merchantId: process.env.NUVEI_MERCHANT_ID,
-  merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
-  secretKey: process.env.NUVEI_SECRET_KEY,
-  apiEndpoint: process.env.NUVEI_API_ENDPOINT,
-  sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
+  username: process.env.NUVEI_SDK_USERNAME,
+  password: process.env.NUVEI_SDK_PASSWORD,
+  securityKey: process.env.NUVEI_SDK_KEY,
+  production: process.env.NUVEI_SANDBOX_MODE !== 'true',
+  apiEndpoint: process.env.NUVEI_API_ENDPOINT
 });
 
 // Middleware to validate GHL credentials
@@ -585,11 +585,11 @@ router.post('/pay/:sessionId/process', paymentRateLimiter, async (req, res) => {
   const lastName = nameParts.slice(1).join(' ') || 'N/A';
 
   const nuvei = new NuveiClient({
-    merchantId: process.env.NUVEI_MERCHANT_ID,
-    merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
-    secretKey: process.env.NUVEI_SECRET_KEY,
-    apiEndpoint: process.env.NUVEI_API_ENDPOINT,
-    sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
+    username: process.env.NUVEI_SDK_USERNAME,
+    password: process.env.NUVEI_SDK_PASSWORD,
+    securityKey: process.env.NUVEI_SDK_KEY,
+    production: process.env.NUVEI_SANDBOX_MODE !== 'true',
+    apiEndpoint: process.env.NUVEI_API_ENDPOINT
   });
 
   try {
@@ -608,7 +608,7 @@ router.post('/pay/:sessionId/process', paymentRateLimiter, async (req, res) => {
       ccCvv
     });
 
-    const transactionId = response.transactionId || response.gwTransactionId || response.ppTransactionID || `txn-${Date.now()}`;
+    const transactionId = response.transactionId;
     session.status = 'success';
     session.transactionId = transactionId;
     checkoutSessions.set(req.params.sessionId, session);

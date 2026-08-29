@@ -9,16 +9,28 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
+// Matches key names for anything that could carry cardholder data or a
+// credential, regardless of which gateway's naming convention is in use
+// (this integration has changed gateways more than once).
+const SENSITIVE_KEY_PATTERN = /cc.?number|card.?number|cvv|cvc|csc|security.?(code|key)|secret|password|api.?key|ssn/i;
+
 /**
  * Strips an upstream gateway/API error payload down to fields safe to
- * return to a client or write to logs. Full raw payloads can echo back
- * submitted data (card numbers, tokens) depending on what the upstream
- * service puts in its error responses.
+ * return to a client or write to logs, by dropping any key that looks like
+ * it could carry cardholder data or a credential (recursively) rather than
+ * allowlisting exact field names — gateway responses vary by provider and a
+ * hardcoded allowlist silently drops useful fields (or worse, silently
+ * admits a new sensitive field) whenever the upstream shape changes.
  */
-function redactErrorDetails(details) {
-  if (!details || typeof details !== 'object') return undefined;
-  const { errorCode, reason, status, gwErrorCode, gwErrorReason } = details;
-  return { errorCode, reason, status, gwErrorCode, gwErrorReason };
+function redactErrorDetails(details, depth = 0) {
+  if (!details || typeof details !== 'object' || depth > 4) return details;
+  if (Array.isArray(details)) return details.map((item) => redactErrorDetails(item, depth + 1));
+
+  return Object.fromEntries(
+    Object.entries(details)
+      .filter(([key]) => !SENSITIVE_KEY_PATTERN.test(key))
+      .map(([key, value]) => [key, redactErrorDetails(value, depth + 1)])
+  );
 }
 
 /**
