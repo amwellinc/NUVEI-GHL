@@ -39,3 +39,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Git worktrees (scratch workspaces for plan execution)
+.worktrees/
