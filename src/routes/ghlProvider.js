@@ -12,7 +12,9 @@ const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 const charges = new Map();
 
 function nuveiConfigForMode(mode) {
-  const production = mode !== 'test';
+  // Fail closed: only an explicit 'live' routes to production credentials.
+  // Anything else (missing/malformed/unexpected mode) uses sandbox/test.
+  const production = mode === 'live';
   return {
     username: process.env.NUVEI_SDK_USERNAME,
     password: process.env.NUVEI_SDK_PASSWORD,
@@ -54,6 +56,7 @@ router.get('/checkout', (_req, res) => {
     let paymentProps = null;
 
     window.addEventListener('message', function (event) {
+      if (event.source !== window.parent) return;
       const data = event.data || {};
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
@@ -108,6 +111,11 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Missing required payment fields' });
   }
 
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
   const nuvei = new NuveiClient(nuveiConfigForMode(mode));
 
   try {
@@ -133,6 +141,12 @@ router.post('/query', (req, res) => {
     return res.status(501).json({ error: `queryUrl type "${type}" is not implemented in Phase 1` });
   }
 
+  // NOTE: GHL's verify request (type=verify) does not include an amount field,
+  // so we cannot reconcile the charged amount against what GHL believes it
+  // initiated at this step — a limitation of GHL's documented protocol, not
+  // something fixable here. The event.source check in the checkout page's
+  // postMessage listener and the amount validation in /charge are the
+  // achievable hardening for this phase.
   const charge = charges.get(chargeId);
   if (charge && charge.status === 'success') {
     return res.status(200).json({ success: true });

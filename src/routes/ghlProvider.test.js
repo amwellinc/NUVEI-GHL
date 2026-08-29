@@ -95,4 +95,66 @@ describe('POST /ghl-provider/charge', () => {
     expect(res.status).toBe(402);
     expect(res.body.error).toBe('No such Issuer');
   });
+
+  test.each([
+    ['missing', undefined],
+    ['zero', 0],
+    ['negative', -5],
+    ['non-numeric', 'not-a-number']
+  ])('returns 400 when amount is %s', async (_label, amount) => {
+    const createPayment = jest.fn().mockResolvedValue({ transactionId: 'txn-x', status: 'CAPTURED' });
+    NuveiClient.mockImplementation(() => ({ createPayment }));
+
+    const payload = {
+      mode: 'test', firstName: 'Jane', lastName: 'Doe',
+      ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+    };
+    if (amount !== undefined) {
+      payload.amount = amount;
+    }
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send(payload);
+
+    expect(res.status).toBe(400);
+    expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  test('mode "test" constructs NuveiClient with production: false', async () => {
+    const createPayment = jest.fn().mockResolvedValue({ transactionId: 'txn-test', status: 'CAPTURED' });
+    NuveiClient.mockImplementation(() => ({ createPayment }));
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send({
+      mode: 'test', amount: 25, firstName: 'Jane', lastName: 'Doe',
+      ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+    });
+
+    expect(res.status).toBe(200);
+    expect(NuveiClient).toHaveBeenCalledWith(expect.objectContaining({ production: false }));
+  });
+
+  test('an unexpected/missing mode fails closed to production: false (not true)', async () => {
+    const createPayment = jest.fn().mockResolvedValue({ transactionId: 'txn-unknown', status: 'CAPTURED' });
+    NuveiClient.mockImplementation(() => ({ createPayment }));
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send({
+      mode: 'totally-bogus', amount: 25, firstName: 'Jane', lastName: 'Doe',
+      ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+    });
+
+    expect(res.status).toBe(200);
+    expect(NuveiClient).toHaveBeenCalledWith(expect.objectContaining({ production: false }));
+  });
+
+  test('mode "live" constructs NuveiClient with production: true', async () => {
+    const createPayment = jest.fn().mockResolvedValue({ transactionId: 'txn-live', status: 'CAPTURED' });
+    NuveiClient.mockImplementation(() => ({ createPayment }));
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send({
+      mode: 'live', amount: 25, firstName: 'Jane', lastName: 'Doe',
+      ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+    });
+
+    expect(res.status).toBe(200);
+    expect(NuveiClient).toHaveBeenCalledWith(expect.objectContaining({ production: true }));
+  });
 });
