@@ -61,7 +61,7 @@ echo ""
 echo -e "${BLUE}→${NC} Creating commit..."
 git commit -m "Feature: Add GoHighLevel (GHL) integration
 
-- Integrate NUVEI with GoHighLevel location: RbHDcK8ndpcPpcny4nga
+- Integrate NUVEI with GoHighLevel location: YOUR_GHL_LOCATION_ID
 - Add GHL client service for API communication
 - Add 6 new GHL endpoints for payment management
 - Auto-link payments to GHL contacts
@@ -241,8 +241,8 @@ echo "   - Go to: https://railway.app"
 echo "   - Select your project"
 echo "   - Go to Variables tab"
 echo "   - Add/Update:"
-echo "     GHL_LOCATION_ID=RbHDcK8ndpcPpcny4nga"
-echo "     GHL_API_TOKEN=pit-9c347602-6af4-48a9-be68-4ba38fdda722"
+echo "     GHL_LOCATION_ID=YOUR_GHL_LOCATION_ID"
+echo "     GHL_API_TOKEN=YOUR_GHL_API_TOKEN"
 echo "   - Railway redeploys automatically!"
 echo ""
 

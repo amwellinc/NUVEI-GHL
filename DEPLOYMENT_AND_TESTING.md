@@ -32,7 +32,7 @@ git add .
 # Commit with message
 git commit -m "Feature: Add GoHighLevel (GHL) integration
 
-- Integrate NUVEI with GoHighLevel location: RbHDcK8ndpcPpcny4nga
+- Integrate NUVEI with GoHighLevel location: YOUR_GHL_LOCATION_ID
 - Add GHL client service and 6 new endpoints
 - Auto-link payments to GHL contacts
 - Add comprehensive documentation"
@@ -70,7 +70,7 @@ Railway automatically detects the push and deploys:
 
 ```bash
 # Check deployment status (optional)
-railway login --token 90b92baf-0340-4df2-beb6-b4dc62d82601
+railway login --token YOUR_RAILWAY_TOKEN
 railway status
 
 # View logs
@@ -93,8 +93,8 @@ railway info
 5. Add/Update these variables:
 
 ```
-GHL_LOCATION_ID=RbHDcK8ndpcPpcny4nga
-GHL_API_TOKEN=pit-9c347602-6af4-48a9-be68-4ba38fdda722
+GHL_LOCATION_ID=YOUR_GHL_LOCATION_ID
+GHL_API_TOKEN=YOUR_GHL_API_TOKEN
 ```
 
 6. Click **Save** → Railway automatically redeploys!
@@ -147,7 +147,7 @@ curl -X GET https://your-railway-url/api/ghl/status
   "success": true,
   "message": "GHL integration active",
   "location": {
-    "id": "RbHDcK8ndpcPpcny4nga",
+    "id": "YOUR_GHL_LOCATION_ID",
     "name": "Your Location Name",
     "email": "location@example.com"
   }
@@ -302,8 +302,8 @@ After deployment, verify:
 2. Select your service
 3. Go to Variables tab
 4. Verify both variables are set:
-   - `GHL_LOCATION_ID=RbHDcK8ndpcPpcny4nga`
-   - `GHL_API_TOKEN=pit-9c347602-6af4-48a9-be68-4ba38fdda722`
+   - `GHL_LOCATION_ID=YOUR_GHL_LOCATION_ID`
+   - `GHL_API_TOKEN=YOUR_GHL_API_TOKEN`
 5. Check that there are no extra spaces in values
 6. Railway should auto-redeploy within 1-2 minutes
 

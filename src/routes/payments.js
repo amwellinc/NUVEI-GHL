@@ -1,35 +1,34 @@
 const express = require('express');
 const router = express.Router();
 const NuveiClient = require('../services/nuveiClient');
+const { redactErrorDetails, createRateLimiter } = require('../lib/security');
 
-// Initialize NUVEI client - supports both traditional and SDK auth
+const paymentRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
+
+// Initialize NUVEI client (REST 1.0 checksum-based auth)
 const nuveiClient = new NuveiClient({
   merchantId: process.env.NUVEI_MERCHANT_ID,
+  merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
   secretKey: process.env.NUVEI_SECRET_KEY,
-  apiEndpoint: process.env.NUVEI_API_ENDPOINT || 'https://secure.safecharge.com/api/v1',
-  sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true',
-  // SDK credentials (alternative authentication)
-  sdkUsername: process.env.NUVEI_SDK_USERNAME,
-  sdkPassword: process.env.NUVEI_SDK_PASSWORD,
-  sdkKey: process.env.NUVEI_SDK_KEY
+  apiEndpoint: process.env.NUVEI_API_ENDPOINT,
+  sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
 });
 
 // Middleware to validate NUVEI credentials
 const validateNuveiConfig = (req, res, next) => {
-  const hasTraditionalAuth = process.env.NUVEI_MERCHANT_ID && process.env.NUVEI_SECRET_KEY;
-  const hasSDKAuth = process.env.NUVEI_SDK_USERNAME && process.env.NUVEI_SDK_PASSWORD && process.env.NUVEI_SDK_KEY;
-  
-  if (!hasTraditionalAuth && !hasSDKAuth) {
+  const hasAuth = process.env.NUVEI_MERCHANT_ID && process.env.NUVEI_MERCHANT_SITE_ID && process.env.NUVEI_SECRET_KEY;
+
+  if (!hasAuth) {
     return res.status(500).json({
       error: 'NUVEI credentials not configured',
-      message: 'Either (NUVEI_MERCHANT_ID + NUVEI_SECRET_KEY) or (NUVEI_SDK_USERNAME + NUVEI_SDK_PASSWORD + NUVEI_SDK_KEY) must be set'
+      message: 'NUVEI_MERCHANT_ID, NUVEI_MERCHANT_SITE_ID, and NUVEI_SECRET_KEY must all be set'
     });
   }
   next();
 };
 
 // POST /api/payments/create - Create a new payment
-router.post('/create', validateNuveiConfig, async (req, res) => {
+router.post('/create', paymentRateLimiter, validateNuveiConfig, async (req, res) => {
   try {
     const paymentData = {
       amount: req.body.amount,
@@ -71,11 +70,11 @@ router.post('/create', validateNuveiConfig, async (req, res) => {
       data: response
     });
   } catch (error) {
-    console.error('Payment creation error:', error);
+    console.error('Payment creation error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
@@ -99,17 +98,17 @@ router.get('/:transactionId', validateNuveiConfig, async (req, res) => {
       data: response
     });
   } catch (error) {
-    console.error('Get payment details error:', error);
+    console.error('Get payment details error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
 
 // POST /api/payments/refund - Refund a payment
-router.post('/refund', validateNuveiConfig, async (req, res) => {
+router.post('/refund', paymentRateLimiter, validateNuveiConfig, async (req, res) => {
   try {
     const refundData = {
       transactionId: req.body.transactionId,
@@ -133,17 +132,17 @@ router.post('/refund', validateNuveiConfig, async (req, res) => {
       data: response
     });
   } catch (error) {
-    console.error('Refund error:', error);
+    console.error('Refund error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
 
 // POST /api/payments/void - Void a payment
-router.post('/void', validateNuveiConfig, async (req, res) => {
+router.post('/void', paymentRateLimiter, validateNuveiConfig, async (req, res) => {
   try {
     const voidData = {
       transactionId: req.body.transactionId,
@@ -164,11 +163,11 @@ router.post('/void', validateNuveiConfig, async (req, res) => {
       data: response
     });
   } catch (error) {
-    console.error('Void payment error:', error);
+    console.error('Void payment error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });

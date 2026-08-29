@@ -55,8 +55,8 @@ Your NUVEI app is now **fully integrated with GoHighLevel**. Here's what was add
 
 | Key | Value |
 |-----|-------|
-| **Location ID** | `RbHDcK8ndpcPpcny4nga` |
-| **API Token** | `pit-9c347602-6af4-48a9-be68-4ba38fdda722` |
+| **Location ID** | `YOUR_GHL_LOCATION_ID` |
+| **API Token** | `YOUR_GHL_API_TOKEN` |
 
 ---
 
@@ -117,8 +117,8 @@ See **[GHL_INTEGRATION.md](GHL_INTEGRATION.md)** for:
 
 1. **Update Railway environment variables:**
    ```
-   GHL_LOCATION_ID=RbHDcK8ndpcPpcny4nga
-   GHL_API_TOKEN=pit-9c347602-6af4-48a9-be68-4ba38fdda722
+   GHL_LOCATION_ID=YOUR_GHL_LOCATION_ID
+   GHL_API_TOKEN=YOUR_GHL_API_TOKEN
    ```
 
 2. **Test locally first:**

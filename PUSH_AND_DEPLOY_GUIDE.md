@@ -38,7 +38,7 @@ git push -u origin main
 
 # 8. Deploy to Railway
 npm install -g @railway/cli
-railway login --token 90b92baf-0340-4df2-beb6-b4dc62d82601
+railway login --token YOUR_RAILWAY_TOKEN
 railway init
 railway up
 ```
@@ -236,7 +236,7 @@ railway --version
 #### Step 3.2: Authenticate with Railway
 
 ```bash
-railway login --token 90b92baf-0340-4df2-beb6-b4dc62d82601
+railway login --token YOUR_RAILWAY_TOKEN
 ```
 
 **Expected Output:**
@@ -285,9 +285,9 @@ cat > /tmp/railway_env.txt << 'EOF'
 NODE_ENV=production
 PORT=3000
 NUVEI_MERCHANT_ID=63
-NUVEI_SDK_USERNAME=AMWELLMULTIPASS
-NUVEI_SDK_PASSWORD=amwellmultipass3306
-NUVEI_SDK_KEY=64E9257352B95186DC86E598ECB97F5D49FB04D58F974051
+NUVEI_SDK_USERNAME=YOUR_NUVEI_SDK_USERNAME
+NUVEI_SDK_PASSWORD=YOUR_NUVEI_SDK_PASSWORD
+NUVEI_SDK_KEY=YOUR_NUVEI_SDK_KEY
 NUVEI_API_ENDPOINT=https://secure.safecharge.com/api/v1
 NUVEI_SANDBOX_MODE=false
 LOG_LEVEL=info

@@ -33,7 +33,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/ghl', ghlRoutes);
 // Clean URLs for GHL Payment Provider registration (no "ghl" in path)
-app.use('/api', ghlRoutes);  // → /api/checkout, /api/query
+app.use('/api', ghlRoutes);  // → /api/checkout, /api/query, /api/webhook
 app.use('/', ghlRoutes);     // → /pay/:sessionId, /pay/:sessionId/process
 
 // 404 handler

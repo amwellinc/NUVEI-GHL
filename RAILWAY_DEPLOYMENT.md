@@ -9,10 +9,10 @@ This guide provides step-by-step instructions to deploy the GHL-NUVEI app to Rai
 - GitHub account with repository access
 - NUVEI SDK credentials:
   - Organization ID: `63`
-  - SDK Username: `AMWELLMULTIPASS`
-  - SDK Password: `amwellmultipass3306`
-  - SDK Key: `64E9257352B95186DC86E598ECB97F5D49FB04D58F974051`
-- Railway API Token: `90b92baf-0340-4df2-beb6-b4dc62d82601` (if using CLI)
+  - SDK Username: `YOUR_NUVEI_SDK_USERNAME`
+  - SDK Password: `YOUR_NUVEI_SDK_PASSWORD`
+  - SDK Key: `YOUR_NUVEI_SDK_KEY`
+- Railway API Token: `YOUR_RAILWAY_TOKEN` (if using CLI)
 
 ## Method 1: Deploy via Railway Dashboard (Recommended)
 
@@ -41,9 +41,9 @@ This guide provides step-by-step instructions to deploy the GHL-NUVEI app to Rai
 NODE_ENV=production
 PORT=3000
 NUVEI_MERCHANT_ID=63
-NUVEI_SDK_USERNAME=AMWELLMULTIPASS
-NUVEI_SDK_PASSWORD=amwellmultipass3306
-NUVEI_SDK_KEY=64E9257352B95186DC86E598ECB97F5D49FB04D58F974051
+NUVEI_SDK_USERNAME=YOUR_NUVEI_SDK_USERNAME
+NUVEI_SDK_PASSWORD=YOUR_NUVEI_SDK_PASSWORD
+NUVEI_SDK_KEY=YOUR_NUVEI_SDK_KEY
 NUVEI_API_ENDPOINT=https://secure.safecharge.com/api/v1
 NUVEI_SANDBOX_MODE=false
 LOG_LEVEL=info
@@ -75,7 +75,7 @@ npm install -g @railway/cli
 
 ```bash
 # Using API token
-railway login --token 90b92baf-0340-4df2-beb6-b4dc62d82601
+railway login --token YOUR_RAILWAY_TOKEN
 ```
 
 ### Step 3: Navigate to Project Directory
@@ -100,9 +100,9 @@ Create a `.env.railway` file with:
 NODE_ENV=production
 PORT=3000
 NUVEI_MERCHANT_ID=63
-NUVEI_SDK_USERNAME=AMWELLMULTIPASS
-NUVEI_SDK_PASSWORD=amwellmultipass3306
-NUVEI_SDK_KEY=64E9257352B95186DC86E598ECB97F5D49FB04D58F974051
+NUVEI_SDK_USERNAME=YOUR_NUVEI_SDK_USERNAME
+NUVEI_SDK_PASSWORD=YOUR_NUVEI_SDK_PASSWORD
+NUVEI_SDK_KEY=YOUR_NUVEI_SDK_KEY
 NUVEI_API_ENDPOINT=https://secure.safecharge.com/api/v1
 NUVEI_SANDBOX_MODE=false
 LOG_LEVEL=info

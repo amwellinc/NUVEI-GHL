@@ -14,7 +14,7 @@
 # - Node.js installed
 # - GitHub account with access to: https://github.com/amwellinc/NUVEI-GHL
 # - GitHub Personal Access Token (PAT) created
-# - Railway account with token: 90b92baf-0340-4df2-beb6-b4dc62d82601
+# - Railway account with token: YOUR_RAILWAY_TOKEN
 #
 ################################################################################
 
@@ -31,7 +31,7 @@ NC='\033[0m' # No Color
 PROJECT_DIR="/Users/arunkemer/DIGI5Y/GHL-NUVEI"
 GITHUB_REPO="https://github.com/amwellinc/NUVEI-GHL.git"
 GITHUB_BRANCH="main"
-RAILWAY_TOKEN="90b92baf-0340-4df2-beb6-b4dc62d82601"
+RAILWAY_TOKEN="YOUR_RAILWAY_TOKEN"
 RAILWAY_PROJECT_NAME="GHL-NUVEI"
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
@@ -242,9 +242,9 @@ cat > "$ENV_VARS_FILE" << 'EOF'
 NODE_ENV=production
 PORT=3000
 NUVEI_MERCHANT_ID=63
-NUVEI_SDK_USERNAME=AMWELLMULTIPASS
-NUVEI_SDK_PASSWORD=amwellmultipass3306
-NUVEI_SDK_KEY=64E9257352B95186DC86E598ECB97F5D49FB04D58F974051
+NUVEI_SDK_USERNAME=YOUR_NUVEI_SDK_USERNAME
+NUVEI_SDK_PASSWORD=YOUR_NUVEI_SDK_PASSWORD
+NUVEI_SDK_KEY=YOUR_NUVEI_SDK_KEY
 NUVEI_API_ENDPOINT=https://secure.safecharge.com/api/v1
 NUVEI_SANDBOX_MODE=false
 LOG_LEVEL=info

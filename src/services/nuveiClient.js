@@ -1,104 +1,99 @@
 const crypto = require('crypto');
 const axios = require('axios');
 
+// Nuvei REST 1.0 base hosts.
+// https://docs.nuvei.com/documentation/accept-payment/server-to-server/rest-1-0/
+const HOSTS = {
+  sandbox: 'https://ppp-test.nuvei.com/ppp/api/v1',
+  production: 'https://secure.safecharge.com/ppp/api/v1'
+};
+
 class NuveiClient {
-  constructor(config) {
-    // Support both traditional API auth and SDK auth
+  constructor(config = {}) {
     this.merchantId = config.merchantId;
+    this.merchantSiteId = config.merchantSiteId;
     this.secretKey = config.secretKey;
-    this.apiEndpoint = config.apiEndpoint || 'https://secure.safecharge.com/api/v1';
-    this.sandboxMode = config.sandboxMode || false;
-    
-    // SDK authentication (alternative method)
-    this.sdkUsername = config.sdkUsername;
-    this.sdkPassword = config.sdkPassword;
-    this.sdkKey = config.sdkKey;
-    
-    // Determine auth method
-    this.useSDKAuth = !!(this.sdkUsername && this.sdkPassword && this.sdkKey);
-    
-    if (!this.merchantId && !this.useSDKAuth) {
-      throw new Error('NUVEI configuration error: Either provide merchantId + secretKey or SDK credentials');
+    this.sandboxMode = config.sandboxMode !== false;
+    this.apiEndpoint = config.apiEndpoint || (this.sandboxMode ? HOSTS.sandbox : HOSTS.production);
+  }
+
+  /**
+   * Deferred to call time (rather than the constructor) so the app can boot
+   * and serve unrelated routes even before NUVEI credentials are configured.
+   */
+  assertConfigured() {
+    if (!this.merchantId || !this.merchantSiteId || !this.secretKey) {
+      throw {
+        statusCode: 500,
+        message: 'NUVEI configuration error: merchantId, merchantSiteId, and secretKey are all required'
+      };
     }
   }
 
   /**
-   * Generate authentication hash for NUVEI API
-   * @param {Object} parameters - Request parameters
-   * @returns {string} - Calculated checksum
+   * Nuvei requires timestamps as YYYYMMDDHHmmss (UTC) for checksum + request fields.
    */
-  /**
-   * Calculate checksum for traditional API authentication
-   * @param {Object} parameters - Request parameters
-   * @returns {string} - Calculated checksum
-   */
-  calculateChecksum(parameters) {
-    const concat = Object.keys(parameters)
-      .sort()
-      .map(key => {
-        const value = parameters[key];
-        if (value === null || value === undefined || value === '') {
-          return '';
-        }
-        return String(value);
-      })
-      .join('');
+  generateTimeStamp() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+  }
 
-    const withSecret = concat + this.secretKey;
-    return crypto.createHash('sha256').update(withSecret).digest('hex');
+  generateClientRequestId() {
+    return `req-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   }
 
   /**
-   * Make a request to NUVEI API
-   * @param {string} endpoint - API endpoint
-   * @param {Object} payload - Request payload
-   * @returns {Promise<Object>} - API response
+   * SHA-256 of the given fields concatenated in order (no separators), with
+   * merchantSecretKey appended last. Field order is endpoint-specific and
+   * fixed by Nuvei — do not reorder or sort.
    */
-  async makeRequest(endpoint, payload) {
-    try {
-      let requestPayload;
-      
-      if (this.useSDKAuth) {
-        // SDK-based authentication
-        requestPayload = {
-          username: this.sdkUsername,
-          password: this.sdkPassword,
-          ...payload
-        };
-        // Add SDK key to headers if needed
-      } else {
-        // Traditional API authentication
-        requestPayload = {
-          merchantId: this.merchantId,
-          ...payload,
-          checksumforapilogin: this.calculateChecksum({
-            merchantId: this.merchantId,
-            ...payload
-          })
-        };
-      }
+  calculateChecksum(orderedValues) {
+    const concat = orderedValues
+      .map((v) => (v === null || v === undefined ? '' : String(v)))
+      .join('');
+    return crypto.createHash('sha256').update(concat + this.secretKey).digest('hex');
+  }
 
-      const response = await axios.post(`${this.apiEndpoint}${endpoint}`, requestPayload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-VERSION': '1.0'
-        },
+  async request(endpoint, payload) {
+    this.assertConfigured();
+    try {
+      const response = await axios.post(`${this.apiEndpoint}/${endpoint}`, payload, {
+        headers: { 'Content-Type': 'application/json' },
         timeout: 30000
       });
-
       return response.data;
     } catch (error) {
-      console.error(`NUVEI API Error: ${error.message}`);
+      console.error(`NUVEI API Error [${endpoint}]: ${error.message}`);
       throw {
         statusCode: error.response?.status || 500,
-        message: error.response?.data?.message || error.message,
+        message: error.response?.data?.reason || error.response?.data?.message || error.message,
         details: error.response?.data
       };
     }
   }
 
   /**
-   * Create a payment
+   * Every payment/order call requires a sessionToken obtained first.
+   * Checksum order: merchantId, merchantSiteId, clientRequestId, timeStamp, secretKey
+   */
+  async getSessionToken() {
+    const timeStamp = this.generateTimeStamp();
+    const clientRequestId = this.generateClientRequestId();
+    const checksum = this.calculateChecksum([this.merchantId, this.merchantSiteId, clientRequestId, timeStamp]);
+
+    return this.request('getSessionToken', {
+      merchantId: this.merchantId,
+      merchantSiteId: this.merchantSiteId,
+      clientRequestId,
+      timeStamp,
+      checksum
+    });
+  }
+
+  /**
+   * Create a payment.
+   * Checksum order: merchantId, merchantSiteId, clientRequestId, amount, currency, timeStamp, secretKey
    * @param {Object} paymentData - Payment information
    * @returns {Promise<Object>} - Payment response
    */
@@ -116,91 +111,142 @@ class NuveiClient {
       ccExpMonth,
       ccExpYear,
       ccCvv,
-      deviceIdentifier,
-      billingAddress,
+      ipAddress,
+      country,
       description
     } = paymentData;
 
-    const payload = {
-      clientRequestId: `${Date.now()}-${Math.random()}`,
-      amount: String(amount),
+    const sessionResponse = await this.getSessionToken();
+    if (!sessionResponse.sessionToken) {
+      throw {
+        statusCode: 502,
+        message: 'Failed to obtain NUVEI session token',
+        details: sessionResponse
+      };
+    }
+
+    const timeStamp = this.generateTimeStamp();
+    const clientRequestId = this.generateClientRequestId();
+    const amountStr = Number(amount).toFixed(2);
+    const checksum = this.calculateChecksum([
+      this.merchantId,
+      this.merchantSiteId,
+      clientRequestId,
+      amountStr,
       currency,
-      clientUniqueId,
-      firstName,
-      lastName,
-      email,
-      phone,
-      userTokenId: userTokenId || '',
-      ccNumber,
-      ccExpMonth: String(ccExpMonth),
-      ccExpYear: String(ccExpYear),
-      ccCvv,
-      deviceIdentifier: deviceIdentifier || '',
+      timeStamp
+    ]);
+
+    const payload = {
+      sessionToken: sessionResponse.sessionToken,
+      merchantId: this.merchantId,
+      merchantSiteId: this.merchantSiteId,
+      clientRequestId,
+      clientUniqueId: clientUniqueId || `txn-${Date.now()}`,
+      userTokenId: userTokenId || email,
+      amount: amountStr,
+      currency,
+      paymentOption: {
+        card: {
+          cardNumber: ccNumber,
+          expirationMonth: String(ccExpMonth).padStart(2, '0'),
+          expirationYear: String(ccExpYear).slice(-2),
+          CVV: ccCvv
+        }
+      },
+      billingAddress: {
+        email,
+        country: country || 'US',
+        firstName,
+        lastName
+      },
+      deviceDetails: {
+        ipAddress: ipAddress || '127.0.0.1'
+      },
+      userDetails: { firstName, lastName, email, phone },
       relatedIdentifier: description || '',
-      billingAddress: billingAddress ? JSON.stringify(billingAddress) : ''
+      timeStamp,
+      checksum
     };
 
-    return this.makeRequest('/payment', payload);
+    return this.request('payment', payload);
   }
 
   /**
-   * Get payment details
+   * Get payment/transaction status.
+   * Checksum order: merchantId, merchantSiteId, clientRequestId, timeStamp, secretKey
    * @param {string} transactionId - Transaction ID from initial payment
    * @returns {Promise<Object>} - Payment details
    */
   async getPaymentDetails(transactionId) {
-    const payload = {
-      clientRequestId: `${Date.now()}-${Math.random()}`,
-      transactionId
-    };
+    const timeStamp = this.generateTimeStamp();
+    const clientRequestId = this.generateClientRequestId();
+    const checksum = this.calculateChecksum([this.merchantId, this.merchantSiteId, clientRequestId, timeStamp]);
 
-    return this.makeRequest('/getPaymentDetails', payload);
+    return this.request('getPaymentStatus', {
+      merchantId: this.merchantId,
+      merchantSiteId: this.merchantSiteId,
+      clientRequestId,
+      transactionId,
+      timeStamp,
+      checksum
+    });
   }
 
   /**
-   * Refund a payment
+   * Refund a settled payment.
+   * Checksum order: merchantId, merchantSiteId, clientRequestId, amount, currency, timeStamp, secretKey
    * @param {Object} refundData - Refund information
    * @returns {Promise<Object>} - Refund response
    */
   async refundPayment(refundData) {
-    const {
-      transactionId,
-      clientUniqueId,
-      amount,
+    const { transactionId, clientUniqueId, amount, currency } = refundData;
+    const timeStamp = this.generateTimeStamp();
+    const clientRequestId = this.generateClientRequestId();
+    const amountStr = Number(amount).toFixed(2);
+    const checksum = this.calculateChecksum([
+      this.merchantId,
+      this.merchantSiteId,
+      clientRequestId,
+      amountStr,
       currency,
-      description
-    } = refundData;
+      timeStamp
+    ]);
 
-    const payload = {
-      clientRequestId: `${Date.now()}-${Math.random()}`,
-      transactionId,
-      clientUniqueId,
-      amount: String(amount),
-      currency,
-      relatedIdentifier: description || ''
-    };
-
-    return this.makeRequest('/refundTransaction', payload);
+    return this.request('refundTransaction', {
+      merchantId: this.merchantId,
+      merchantSiteId: this.merchantSiteId,
+      clientRequestId,
+      clientUniqueId: clientUniqueId || `refund-${Date.now()}`,
+      relatedTransactionId: transactionId,
+      amount: amountStr,
+      currency: currency || 'USD',
+      timeStamp,
+      checksum
+    });
   }
 
   /**
-   * Void a payment (cancel if not yet processed)
+   * Void an un-settled payment.
+   * Checksum order: merchantId, merchantSiteId, clientRequestId, timeStamp, secretKey
    * @param {Object} voidData - Void information
    * @returns {Promise<Object>} - Void response
    */
   async voidPayment(voidData) {
-    const {
-      transactionId,
-      clientUniqueId
-    } = voidData;
+    const { transactionId, clientUniqueId } = voidData;
+    const timeStamp = this.generateTimeStamp();
+    const clientRequestId = this.generateClientRequestId();
+    const checksum = this.calculateChecksum([this.merchantId, this.merchantSiteId, clientRequestId, timeStamp]);
 
-    const payload = {
-      clientRequestId: `${Date.now()}-${Math.random()}`,
-      transactionId,
-      clientUniqueId
-    };
-
-    return this.makeRequest('/voidTransaction', payload);
+    return this.request('voidTransaction', {
+      merchantId: this.merchantId,
+      merchantSiteId: this.merchantSiteId,
+      clientRequestId,
+      clientUniqueId: clientUniqueId || `void-${Date.now()}`,
+      relatedTransactionId: transactionId,
+      timeStamp,
+      checksum
+    });
   }
 }
 

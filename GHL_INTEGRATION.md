@@ -23,8 +23,8 @@ The GHL integration allows you to:
 Add to your `.env` file or Railway dashboard:
 
 ```
-GHL_LOCATION_ID=RbHDcK8ndpcPpcny4nga
-GHL_API_TOKEN=pit-9c347602-6af4-48a9-be68-4ba38fdda722
+GHL_LOCATION_ID=YOUR_GHL_LOCATION_ID
+GHL_API_TOKEN=YOUR_GHL_API_TOKEN
 GHL_API_ENDPOINT=https://rest.gohighlevel.com/v1
 ```
 
@@ -41,7 +41,7 @@ curl -X GET http://localhost:3000/api/ghl/status \
   "success": true,
   "message": "GHL integration active",
   "location": {
-    "id": "RbHDcK8ndpcPpcny4nga",
+    "id": "YOUR_GHL_LOCATION_ID",
     "name": "Your Location Name",
     "email": "location@example.com"
   }
@@ -64,7 +64,7 @@ Verifies that your GHL location is accessible and the integration is working.
   "success": true,
   "message": "GHL integration active",
   "location": {
-    "id": "RbHDcK8ndpcPpcny4nga",
+    "id": "YOUR_GHL_LOCATION_ID",
     "name": "Location Name",
     "email": "contact@location.com"
   }

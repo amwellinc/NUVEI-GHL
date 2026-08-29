@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const GHLClient = require('../services/ghlClient');
 const NuveiClient = require('../services/nuveiClient');
+const { escapeHtml, redactErrorDetails, timingSafeEqual, isAllowedRedirect, createRateLimiter } = require('../lib/security');
 
 // ─── GHL Custom Payment Provider checkout session store ───────────────────────
 // Sessions expire after 30 minutes
@@ -14,6 +15,29 @@ function cleanExpiredSessions() {
     if (s.createdAt < cutoff) checkoutSessions.delete(id);
   }
 }
+setInterval(cleanExpiredSessions, 5 * 60 * 1000).unref();
+
+// Only redirect customers back to our own hosted domain or a GHL funnel domain.
+const ALLOWED_REDIRECT_ORIGINS = [process.env.APP_URL, 'https://app.gohighlevel.com'].filter(Boolean);
+
+// Requests claiming to come from GHL's Custom Payment Provider flow must carry
+// this shared secret (configured on both sides: here via env, and in the GHL
+// marketplace app's provider settings) — closes the unauthenticated /checkout,
+// /query, and /webhook endpoints.
+const verifyProviderAuth = (req, res, next) => {
+  const configured = process.env.PAYMENT_PROVIDER_SHARED_SECRET;
+  if (!configured) {
+    console.error('PAYMENT_PROVIDER_SHARED_SECRET is not set — rejecting provider request for safety');
+    return res.status(500).json({ error: 'Payment provider auth not configured' });
+  }
+  const supplied = req.headers['x-provider-secret'];
+  if (!timingSafeEqual(supplied, configured)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
+
+const paymentRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 
 // Initialize GHL client (v2 Custom App / Private Integration)
 const ghlClient = new GHLClient({
@@ -22,15 +46,13 @@ const ghlClient = new GHLClient({
   apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://services.leadconnectorhq.com'
 });
 
-// Initialize NUVEI client
+// Initialize NUVEI client (REST 1.0 checksum-based auth)
 const nuveiClient = new NuveiClient({
   merchantId: process.env.NUVEI_MERCHANT_ID,
+  merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
   secretKey: process.env.NUVEI_SECRET_KEY,
-  apiEndpoint: process.env.NUVEI_API_ENDPOINT || 'https://secure.safecharge.com/api/v1',
-  sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true',
-  sdkUsername: process.env.NUVEI_SDK_USERNAME,
-  sdkPassword: process.env.NUVEI_SDK_PASSWORD,
-  sdkKey: process.env.NUVEI_SDK_KEY
+  apiEndpoint: process.env.NUVEI_API_ENDPOINT,
+  sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
 });
 
 // Middleware to validate GHL credentials
@@ -75,7 +97,7 @@ router.get('/status', validateGHLConfig, async (_req, res) => {
  * POST /api/ghl/payment/create
  * Create a payment and associate with GHL contact
  */
-router.post('/payment/create', validateGHLConfig, async (req, res) => {
+router.post('/payment/create', paymentRateLimiter, validateGHLConfig, async (req, res) => {
   try {
     const {
       contactId,
@@ -165,11 +187,11 @@ Time: ${new Date().toISOString()}`;
       data: paymentResponse
     });
   } catch (error) {
-    console.error('GHL payment creation error:', error);
+    console.error('GHL payment creation error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
@@ -178,7 +200,7 @@ Time: ${new Date().toISOString()}`;
  * POST /api/ghl/payment/refund
  * Refund a payment and update GHL contact
  */
-router.post('/payment/refund', validateGHLConfig, async (req, res) => {
+router.post('/payment/refund', paymentRateLimiter, validateGHLConfig, async (req, res) => {
   try {
     const {
       transactionId,
@@ -233,11 +255,11 @@ Time: ${new Date().toISOString()}`;
       data: refundResponse
     });
   } catch (error) {
-    console.error('GHL refund error:', error);
+    console.error('GHL refund error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
@@ -265,6 +287,46 @@ router.get('/contacts', validateGHLConfig, async (req, res) => {
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
+      details: error.details
+    });
+  }
+});
+
+/**
+ * POST /api/ghl/company/associate
+ * Associate one company to many contacts (one-to-many)
+ */
+router.post('/company/associate', validateGHLConfig, async (req, res) => {
+  try {
+    const { companyId, contactIds, subAccountId } = req.body;
+
+    if (!companyId || !Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'companyId and non-empty contactIds array are required'
+      });
+    }
+
+    if (subAccountId && subAccountId !== process.env.SUB_ACCOUNT_ID) {
+      console.warn('Sub-account mismatch', subAccountId, process.env.SUB_ACCOUNT_ID);
+      // We do not reject here because we still want to attempt if this app is configured for AM333.
+    }
+
+    const associations = await ghlClient.associateContactsToCompany(companyId, contactIds);
+
+    res.status(200).json({
+      success: true,
+      message: 'Company associated with contacts successfully',
+      companyId,
+      contactCount: contactIds.length,
+      associations
+    });
+  } catch (error) {
+    console.error('GHL company/associate error:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'Failed to associate company and contacts',
       details: error.details
     });
   }
@@ -305,7 +367,7 @@ router.get('/contacts/:contactId', validateGHLConfig, async (req, res) => {
  * POST /api/ghl/webhook/payment-status
  * Handle webhooks from NUVEI/GHL for payment status updates
  */
-router.post('/webhook/payment-status', async (req, res) => {
+router.post('/webhook/payment-status', verifyProviderAuth, async (req, res) => {
   try {
     const { transactionId, status, contactId, amount } = req.body;
 
@@ -357,13 +419,24 @@ Updated: ${new Date().toISOString()}`;
  * GHL calls this when a customer reaches the payment step.
  * Returns a paymentUrl to redirect the customer to our hosted payment form.
  */
-router.post('/checkout', (req, res) => {
+router.post('/checkout', paymentRateLimiter, verifyProviderAuth, (req, res) => {
   cleanExpiredSessions();
 
   const {
     amount, currency, description, orderId, contactId, locationId,
     customer, successUrl, failureUrl, liveMode, uniqueId
   } = req.body;
+
+  if (!amount || Number(amount) <= 0 || !Number.isFinite(Number(amount))) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
+  // successUrl/failureUrl are only used later as redirect targets — reject
+  // anything off our own domain / GHL now, rather than trusting it at redirect time.
+  if ((successUrl && !isAllowedRedirect(successUrl, ALLOWED_REDIRECT_ORIGINS)) ||
+      (failureUrl && !isAllowedRedirect(failureUrl, ALLOWED_REDIRECT_ORIGINS))) {
+    return res.status(400).json({ error: 'successUrl/failureUrl must be on an allowed domain' });
+  }
 
   console.log(`[GHL Checkout] Order: ${orderId}, Amount: ${amount} ${currency || 'USD'}`);
 
@@ -393,7 +466,7 @@ router.post('/checkout', (req, res) => {
  * GET /api/ghl/query/:transactionId
  * GHL calls this to verify payment status after redirect.
  */
-router.get('/query/:transactionId', (_req, res) => {
+router.get('/query/:transactionId', verifyProviderAuth, (_req, res) => {
   const { transactionId } = _req.params;
   for (const [, session] of checkoutSessions) {
     if (session.transactionId === transactionId) {
@@ -414,12 +487,16 @@ router.get('/pay/:sessionId', (req, res) => {
     return res.status(404).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:60px">Payment session not found or expired.<br><br><a href="javascript:history.back()">Go back</a></h2>');
   }
 
-  const amount = parseFloat(session.amount).toFixed(2);
-  const currency = session.currency || 'USD';
-  const description = session.description || 'Order Payment';
-  const customerName = session.customer?.name || '';
-  const customerEmail = session.customer?.email || '';
+  const amount = escapeHtml(parseFloat(session.amount).toFixed(2));
+  const currency = escapeHtml(/^[A-Za-z]{3}$/.test(session.currency || '') ? session.currency : 'USD');
+  const description = escapeHtml(session.description || 'Order Payment');
+  const customerName = escapeHtml(session.customer?.name || '');
+  const customerEmail = escapeHtml(session.customer?.email || '');
   const appUrl = process.env.APP_URL || 'https://am333-nuvei-production.up.railway.app';
+
+  // Prevent this card-entry page from being framed for a clickjacking/UI-redress attack.
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Content-Security-Policy', "frame-ancestors 'none'; default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'");
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -491,25 +568,26 @@ router.get('/pay/:sessionId', (req, res) => {
  * Handles card submission from the hosted payment form.
  * (Mounted at /pay in server.js)
  */
-router.post('/pay/:sessionId/process', async (req, res) => {
+router.post('/pay/:sessionId/process', paymentRateLimiter, async (req, res) => {
   const session = checkoutSessions.get(req.params.sessionId);
   if (!session) {
     return res.status(404).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:60px">Session expired. Please go back and retry.</h2>');
   }
 
   const { ccNumber, ccExpMonth, ccExpYear, ccCvv, cardName, email } = req.body;
+  if (!ccNumber || !ccExpMonth || !ccExpYear || !ccCvv) {
+    return res.status(400).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:60px">Missing card details. Please go back and retry.</h2>');
+  }
   const nameParts = (cardName || session.customer?.name || 'Customer').trim().split(' ');
   const firstName = nameParts[0] || 'Customer';
   const lastName = nameParts.slice(1).join(' ') || 'N/A';
 
   const nuvei = new NuveiClient({
     merchantId: process.env.NUVEI_MERCHANT_ID,
+    merchantSiteId: process.env.NUVEI_MERCHANT_SITE_ID,
     secretKey: process.env.NUVEI_SECRET_KEY,
-    apiEndpoint: process.env.NUVEI_API_ENDPOINT || 'https://secure.safecharge.com/api/v1',
-    sandboxMode: process.env.NUVEI_SANDBOX_MODE === 'true',
-    sdkUsername: process.env.NUVEI_SDK_USERNAME,
-    sdkPassword: process.env.NUVEI_SDK_PASSWORD,
-    sdkKey: process.env.NUVEI_SDK_KEY
+    apiEndpoint: process.env.NUVEI_API_ENDPOINT,
+    sandboxMode: process.env.NUVEI_SANDBOX_MODE !== 'false'
   });
 
   try {
@@ -535,13 +613,14 @@ router.post('/pay/:sessionId/process', async (req, res) => {
 
     console.log(`[GHL Checkout] Success. Order: ${session.orderId}, TxnID: ${transactionId}`);
 
-    const base = session.successUrl || '/';
+    const base = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS) ? session.successUrl : '/';
     res.redirect(base.includes('?') ? `${base}&transactionId=${transactionId}` : `${base}?transactionId=${transactionId}`);
   } catch (error) {
     session.status = 'failed';
     checkoutSessions.set(req.params.sessionId, session);
-    console.error(`[GHL Checkout] Failed. Order: ${session.orderId}`, error.message);
-    res.redirect(session.failureUrl || '/');
+    console.error(`[GHL Checkout] Failed. Order: ${session.orderId}`, error.message, redactErrorDetails(error.details));
+    const failBase = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS) ? session.failureUrl : '/';
+    res.redirect(failBase);
   }
 });
 

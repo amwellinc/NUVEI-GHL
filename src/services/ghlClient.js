@@ -141,6 +141,38 @@ class GHLClient {
   }
 
   /**
+   * Associate a contact to a company (one-to-many support)
+   * @param {string} contactId - Contact ID
+   * @param {string} companyId - Company ID
+   * @returns {Promise<Object>} - Updated contact
+   */
+  async updateContactCompany(contactId, companyId) {
+    return this.updateContact(contactId, { companyId });
+  }
+
+  /**
+   * Associate multiple contacts to one company
+   * @param {string} companyId - Company ID
+   * @param {Array<string>} contactIds - Array of contact IDs
+   * @returns {Promise<Object[]>} - Updated contacts array
+   */
+  async associateContactsToCompany(companyId, contactIds = []) {
+    if (!companyId) {
+      throw { statusCode: 400, message: 'companyId is required' };
+    }
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      throw { statusCode: 400, message: 'contactIds must be a non-empty array' };
+    }
+
+    const results = [];
+    for (const contactId of contactIds) {
+      const updated = await this.updateContactCompany(contactId, companyId);
+      results.push({ contactId, updated });
+    }
+    return results;
+  }
+
+  /**
    * Get webhooks for location (v2 API)
    * @returns {Promise<Object>} - List of webhooks
    */
