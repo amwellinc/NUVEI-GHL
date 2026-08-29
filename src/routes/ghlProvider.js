@@ -3,7 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const NuveiClient = require('../services/nuveiClient');
 const { verifyApiKey } = require('../services/ghlProviderConfig');
-const { escapeHtml, createRateLimiter, redactErrorDetails } = require('../lib/security');
+const { createRateLimiter, redactErrorDetails, timingSafeEqual } = require('../lib/security');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 
@@ -11,19 +11,69 @@ const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 // Same ephemeral-across-restarts caveat as the OAuth token store (Task 2).
 const charges = new Map();
 
+// GHL's `verify` call may not arrive immediately after the iframe reports
+// success, so charge records need a much longer window than the 30-minute TTL
+// the old (removed) checkout-session store used.
+const CHARGE_TTL_MS = 24 * 60 * 60 * 1000;
+const CHARGE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+function cleanExpiredCharges() {
+  const cutoff = Date.now() - CHARGE_TTL_MS;
+  for (const [id, charge] of charges) {
+    if (charge.createdAt < cutoff) charges.delete(id);
+  }
+}
+setInterval(cleanExpiredCharges, CHARGE_SWEEP_INTERVAL_MS).unref();
+
+// GHL's `payment_initiate_props.mode` is "payment" (vs. a subscription/setup
+// mode) — it is NOT a live/test indicator, so it must never be used to pick a
+// gateway. The real live/test signal is the publishableKey: registration
+// generates a distinct one per mode (see ghlProviderConfig.generateProviderSecrets)
+// and GHL echoes back the active mode's key in payment_initiate_props.
+function resolveChargeMode(publishableKey) {
+  // Operator safety override takes precedence over the request-derived signal:
+  // NUVEI_SANDBOX_MODE=true pins every charge to the sandbox, matching how
+  // src/routes/payments.js and src/routes/ghl.js already honour this flag.
+  if (process.env.NUVEI_SANDBOX_MODE === 'true') return 'test';
+
+  const liveKey = process.env.GHL_PROVIDER_LIVE_PUBLISHABLE_KEY;
+  const testKey = process.env.GHL_PROVIDER_TEST_PUBLISHABLE_KEY;
+
+  if (liveKey && timingSafeEqual(publishableKey, liveKey)) return 'live';
+  if (testKey && timingSafeEqual(publishableKey, testKey)) return 'test';
+  // Fail closed: an unrecognised (or absent) publishableKey never reaches
+  // production credentials.
+  return 'test';
+}
+
 function nuveiConfigForMode(mode) {
-  // Fail closed: only an explicit 'live' routes to production credentials.
-  // Anything else (missing/malformed/unexpected mode) uses sandbox/test.
-  const production = mode === 'live';
+  // BaseCommerce's sandbox is a separate merchant account from production with
+  // its own credential triple — production credentials do not authenticate
+  // against the sandbox host — so the credential set is selected per mode
+  // alongside the host, not shared across both.
+  if (mode === 'live') {
+    return {
+      username: process.env.NUVEI_SDK_USERNAME,
+      password: process.env.NUVEI_SDK_PASSWORD,
+      securityKey: process.env.NUVEI_SDK_KEY,
+      production: true
+    };
+  }
   return {
-    username: process.env.NUVEI_SDK_USERNAME,
-    password: process.env.NUVEI_SDK_PASSWORD,
-    securityKey: process.env.NUVEI_SDK_KEY,
-    production
+    username: process.env.NUVEI_SDK_USERNAME_TEST,
+    password: process.env.NUVEI_SDK_PASSWORD_TEST,
+    securityKey: process.env.NUVEI_SDK_KEY_TEST,
+    production: false
   };
 }
 
 router.get('/checkout', (_req, res) => {
+  // GHL legitimately iframes this page, so X-Frame-Options (single-origin only)
+  // is unusable here; CSP frame-ancestors allowlists GHL's origins instead.
+  res.setHeader(
+    'Content-Security-Policy',
+    "frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com; default-src 'self'; script-src 'self' 'unsafe-inline'"
+  );
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -77,7 +127,12 @@ router.get('/checkout', (_req, res) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: paymentProps.mode === 'live' ? 'live' : 'test',
+            // No client-asserted mode: the server derives live/test from the
+            // publishableKey GHL supplied in payment_initiate_props.
+            publishableKey: paymentProps.publishableKey,
+            transactionId: paymentProps.transactionId,
+            orderId: paymentProps.orderId,
+            locationId: paymentProps.locationId,
             amount: paymentProps.amount,
             firstName: nameParts[0] || 'Customer',
             lastName: nameParts.slice(1).join(' ') || 'N/A',
@@ -105,7 +160,16 @@ router.get('/checkout', (_req, res) => {
 });
 
 router.post('/charge', chargeRateLimiter, async (req, res) => {
-  const { mode, amount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv } = req.body;
+  const {
+    publishableKey, transactionId, orderId, locationId,
+    amount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv
+  } = req.body;
+
+  // transactionId binds this charge to the GHL transaction it is paying for.
+  // Without it /query cannot reconcile, so it is required up front.
+  if (!transactionId) {
+    return res.status(400).json({ error: 'Missing transactionId' });
+  }
 
   if (!amount || !ccNumber || !ccExpMonth || !ccExpYear || !ccCvv) {
     return res.status(400).json({ error: 'Missing required payment fields' });
@@ -116,12 +180,31 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Invalid amount' });
   }
 
+  const mode = resolveChargeMode(publishableKey);
   const nuvei = new NuveiClient(nuveiConfigForMode(mode));
 
   try {
     const result = await nuvei.createPayment({ amount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv });
     const chargeId = crypto.randomUUID();
-    charges.set(chargeId, { status: 'success', transactionId: result.transactionId, createdAt: Date.now() });
+    charges.set(chargeId, {
+      status: 'success',
+      mode,
+      transactionId,
+      orderId,
+      locationId,
+      amount: numericAmount,
+      // BaseCommerce's own transaction id — distinct from GHL's transactionId.
+      gatewayTransactionId: result.transactionId,
+      createdAt: Date.now()
+    });
+    // Out-of-band reconciliation trail: the charges Map is in-memory only, so a
+    // deploy/restart/crash between here and GHL's verify call would otherwise
+    // leave a real settled charge with no record an operator could act on.
+    console.log(
+      `[GHL Provider Charge] Succeeded — transactionId=${transactionId} chargeId=${chargeId} ` +
+      `gatewayTransactionId=${result.transactionId} amount=${numericAmount} mode=${mode} ` +
+      `orderId=${orderId || 'n/a'} locationId=${locationId || 'n/a'}`
+    );
     res.status(200).json({ chargeId });
   } catch (error) {
     console.error('[GHL Provider Charge] Failed:', error.message, redactErrorDetails(error.details));
@@ -130,7 +213,7 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
 });
 
 router.post('/query', (req, res) => {
-  const { type, apiKey, chargeId } = req.body;
+  const { type, apiKey, chargeId, transactionId } = req.body;
   const mode = verifyApiKey(apiKey, 'live') ? 'live' : verifyApiKey(apiKey, 'test') ? 'test' : null;
 
   if (!mode) {
@@ -141,14 +224,23 @@ router.post('/query', (req, res) => {
     return res.status(501).json({ error: `queryUrl type "${type}" is not implemented in Phase 1` });
   }
 
-  // NOTE: GHL's verify request (type=verify) does not include an amount field,
-  // so we cannot reconcile the charged amount against what GHL believes it
-  // initiated at this step — a limitation of GHL's documented protocol, not
-  // something fixable here. The event.source check in the checkout page's
-  // postMessage listener and the amount validation in /charge are the
-  // achievable hardening for this phase.
+  // Reconciliation: the chargeId is bound to the GHL transactionId recorded at
+  // /charge time, and both must match before this charge is confirmed. That
+  // binding is what closes the order-substitution risk — without it, anyone
+  // could run a $0.01 charge of their own and post its chargeId back to GHL as
+  // the success response for an unrelated, much larger order.
+  //
+  // Amount reconciliation specifically remains out of reach: GHL's verify
+  // request carries no amount field, so we cannot re-check the charged amount
+  // against what GHL believes it initiated. That is a limitation of GHL's
+  // documented protocol, not something fixable here; the amount validation in
+  // /charge and the event.source check in the checkout page's postMessage
+  // listener are the other achievable hardening for this phase.
+  //
+  // A transactionId mismatch is deliberately reported identically to an unknown
+  // chargeId, so the response never discloses which of the two failed.
   const charge = charges.get(chargeId);
-  if (charge && charge.status === 'success') {
+  if (charge && charge.status === 'success' && charge.transactionId === transactionId) {
     return res.status(200).json({ success: true });
   }
   return res.status(200).json({ success: false });
