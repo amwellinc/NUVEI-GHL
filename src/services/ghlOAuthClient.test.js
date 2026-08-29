@@ -32,6 +32,64 @@ describe('exchangeCodeForTokens', () => {
     expect(result.accessToken).toBe('a1');
     expect(tokenStore.getTokens('loc-9').accessToken).toBe('a1');
   });
+
+  test('rejects with a normalized error when the token request fails at the network level', async () => {
+    axios.post.mockRejectedValueOnce(new Error('network timeout'));
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({
+      statusCode: 500,
+      message: 'GHL OAuth token request failed'
+    });
+  });
+
+  test('rejects when the GHL response is missing access_token', async () => {
+    axios.post.mockResolvedValueOnce({
+      data: { refresh_token: 'r1', expires_in: 3600, locationId: 'loc-missing-token' }
+    });
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'GHL OAuth response missing required fields'
+    });
+    expect(tokenStore.getTokens('loc-missing-token')).toBeNull();
+  });
+
+  test('rejects when the GHL response is missing expires_in', async () => {
+    axios.post.mockResolvedValueOnce({
+      data: { access_token: 'a1', refresh_token: 'r1', locationId: 'loc-missing-expiry' }
+    });
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'GHL OAuth response missing required fields'
+    });
+    expect(tokenStore.getTokens('loc-missing-expiry')).toBeNull();
+  });
+
+  test('rejects when the GHL response is missing locationId', async () => {
+    axios.post.mockResolvedValueOnce({
+      data: { access_token: 'a1', refresh_token: 'r1', expires_in: 3600 }
+    });
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'GHL OAuth response missing required fields'
+    });
+  });
+
+  test('rejects with a clear config error when GHL_MARKETPLACE_CLIENT_ID is unset', async () => {
+    delete process.env.GHL_MARKETPLACE_CLIENT_ID;
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({ statusCode: 500 });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('rejects with a clear config error when GHL_MARKETPLACE_CLIENT_SECRET is unset', async () => {
+    delete process.env.GHL_MARKETPLACE_CLIENT_SECRET;
+
+    await expect(exchangeCodeForTokens('the-code')).rejects.toMatchObject({ statusCode: 500 });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
 });
 
 describe('getValidAccessToken', () => {
@@ -64,5 +122,33 @@ describe('getValidAccessToken', () => {
 describe('refreshAccessToken', () => {
   test('throws a clean error when the store has no tokens to refresh', async () => {
     await expect(refreshAccessToken('unknown-location')).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  test('rejects with a normalized error when the refresh request fails at the network level', async () => {
+    tokenStore.saveTokens({ locationId: 'loc-net', accessToken: 'old', refreshToken: 'r-old', expiresAt: Date.now() - 1000 });
+    axios.post.mockRejectedValueOnce(new Error('network timeout'));
+
+    await expect(refreshAccessToken('loc-net')).rejects.toMatchObject({
+      statusCode: 500,
+      message: 'GHL OAuth token request failed'
+    });
+  });
+
+  test('rejects when the refresh response is missing required fields', async () => {
+    tokenStore.saveTokens({ locationId: 'loc-bad', accessToken: 'old', refreshToken: 'r-old', expiresAt: Date.now() - 1000 });
+    axios.post.mockResolvedValueOnce({ data: { refresh_token: 'new-refresh' } });
+
+    await expect(refreshAccessToken('loc-bad')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'GHL OAuth response missing required fields'
+    });
+  });
+
+  test('rejects with a clear config error when credentials are unset', async () => {
+    tokenStore.saveTokens({ locationId: 'loc-cfg', accessToken: 'old', refreshToken: 'r-old', expiresAt: Date.now() - 1000 });
+    delete process.env.GHL_MARKETPLACE_CLIENT_ID;
+
+    await expect(refreshAccessToken('loc-cfg')).rejects.toMatchObject({ statusCode: 500 });
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });

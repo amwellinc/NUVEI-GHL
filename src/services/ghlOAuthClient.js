@@ -3,6 +3,21 @@ const tokenStore = require('./ghlTokenStore');
 
 const TOKEN_URL = 'https://services.leadconnectorhq.com/oauth/token';
 
+/**
+ * Deferred to call time (rather than module load) so the app can boot and
+ * serve unrelated routes even before OAuth credentials are configured.
+ * Without this guard, a missing env var would silently serialize the
+ * literal string "undefined" into the request body instead of failing loudly.
+ */
+function assertConfigured() {
+  if (!process.env.GHL_MARKETPLACE_CLIENT_ID || !process.env.GHL_MARKETPLACE_CLIENT_SECRET) {
+    throw {
+      statusCode: 500,
+      message: 'GHL OAuth configuration error: GHL_MARKETPLACE_CLIENT_ID and GHL_MARKETPLACE_CLIENT_SECRET are both required'
+    };
+  }
+}
+
 function buildTokenRequestBody(extraFields) {
   return new URLSearchParams({
     client_id: process.env.GHL_MARKETPLACE_CLIENT_ID,
@@ -24,13 +39,30 @@ async function requestTokens(body) {
   }
 }
 
+/**
+ * A 200 response with a missing/malformed access_token or expires_in must
+ * not be saved silently (accessToken: undefined, expiresAt: NaN) — fail
+ * loudly instead so the caller sees a clear error rather than a token store
+ * entry that looks valid but isn't.
+ */
+function assertValidTokenResponse(data, { requireLocationId = false } = {}) {
+  const isMissingRequiredField =
+    !data || !data.access_token || !data.expires_in || (requireLocationId && !data.locationId);
+  if (isMissingRequiredField) {
+    throw { statusCode: 502, message: 'GHL OAuth response missing required fields' };
+  }
+}
+
 async function exchangeCodeForTokens(code) {
+  assertConfigured();
+
   const data = await requestTokens(buildTokenRequestBody({
     grant_type: 'authorization_code',
     code,
     user_type: 'Location',
     redirect_uri: process.env.GHL_OAUTH_REDIRECT_URI
   }));
+  assertValidTokenResponse(data, { requireLocationId: true });
 
   const tokens = {
     locationId: data.locationId,
@@ -47,12 +79,14 @@ async function refreshAccessToken(locationId) {
   if (!existing) {
     throw { statusCode: 401, message: `No stored GHL OAuth tokens for location ${locationId} — re-authorize` };
   }
+  assertConfigured();
 
   const data = await requestTokens(buildTokenRequestBody({
     grant_type: 'refresh_token',
     refresh_token: existing.refreshToken,
     user_type: 'Location'
   }));
+  assertValidTokenResponse(data);
 
   const tokens = {
     locationId,
