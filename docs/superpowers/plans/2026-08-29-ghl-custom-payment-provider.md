@@ -70,7 +70,7 @@ describe('verifyApiKey', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
+Run: `node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
 Expected: FAIL — `Cannot find module './ghlProviderConfig'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -101,13 +101,12 @@ module.exports = { generateProviderSecrets, verifyApiKey };
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
+Run: `node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
 Expected: PASS, 3 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/services/ghlProviderConfig.js src/services/ghlProviderConfig.test.js
 git commit -m "feat: add GHL provider apiKey generation and verification"
 ```
@@ -163,7 +162,7 @@ describe('isExpired', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlTokenStore.test.js`
+Run: `node_modules/.bin/jest src/services/ghlTokenStore.test.js`
 Expected: FAIL — `Cannot find module './ghlTokenStore'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -191,13 +190,12 @@ module.exports = { saveTokens, getTokens, isExpired };
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlTokenStore.test.js`
+Run: `node_modules/.bin/jest src/services/ghlTokenStore.test.js`
 Expected: PASS, 5 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/services/ghlTokenStore.js src/services/ghlTokenStore.test.js
 git commit -m "feat: add in-memory GHL OAuth token store (Phase 1 — no persistence across restarts yet)"
 ```
@@ -290,7 +288,7 @@ describe('refreshAccessToken', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlOAuthClient.test.js`
+Run: `node_modules/.bin/jest src/services/ghlOAuthClient.test.js`
 Expected: FAIL — `Cannot find module './ghlOAuthClient'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -379,13 +377,12 @@ module.exports = { exchangeCodeForTokens, refreshAccessToken, getValidAccessToke
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlOAuthClient.test.js`
+Run: `node_modules/.bin/jest src/services/ghlOAuthClient.test.js`
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/services/ghlOAuthClient.js src/services/ghlOAuthClient.test.js
 git commit -m "feat: add GHL OAuth token exchange/refresh client"
 ```
@@ -442,7 +439,7 @@ app.use('/oauth', oauthRoutes);
 
 - [ ] **Step 3: Run the existing full test suite to confirm nothing broke**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest`
+Run: `node_modules/.bin/jest`
 Expected: PASS, all existing tests plus Tasks 1–3's new tests
 
 - [ ] **Step 4: Manual verification (needs Client ID/Secret + Redirect URL from the user first — see plan header)**
@@ -455,7 +452,6 @@ This step cannot run until the user provides the Marketplace App's real Client I
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/routes/oauth.js src/server.js
 git commit -m "feat: add GHL OAuth callback route"
 ```
@@ -516,7 +512,7 @@ describe('registerProvider', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
+Run: `node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
 Expected: FAIL — `registerProvider is not a function`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -551,7 +547,7 @@ module.exports = { generateProviderSecrets, verifyApiKey, registerProvider };
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
+Run: `node_modules/.bin/jest src/services/ghlProviderConfig.test.js`
 Expected: PASS
 
 - [ ] **Step 5: One-off registration script + manual run (needs Task 4's OAuth install completed first)**
@@ -583,7 +579,6 @@ Run once, manually, after OAuth install: `node scripts/register-ghl-provider.js`
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/services/ghlProviderConfig.js src/services/ghlProviderConfig.test.js scripts/register-ghl-provider.js
 git commit -m "feat: add GHL custom provider registration call and one-off setup script"
 ```
@@ -710,7 +705,7 @@ This introduces `supertest` as a new dev dependency (not currently in `package.j
 - [ ] **Step 2: Install supertest and run test to verify it fails**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && npm install --save-dev supertest
+npm install --save-dev supertest
 node_modules/.bin/jest src/routes/ghlProvider.test.js
 ```
 
@@ -867,7 +862,7 @@ module.exports = router;
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest src/routes/ghlProvider.test.js`
+Run: `node_modules/.bin/jest src/routes/ghlProvider.test.js`
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Mount the router in server.js**
@@ -882,13 +877,12 @@ app.use('/ghl-provider', ghlProviderRoutes);
 
 - [ ] **Step 6: Run the full suite**
 
-Run: `cd /Users/arunkemer/DIGI5Y/GHL-NUVEI && node_modules/.bin/jest`
+Run: `node_modules/.bin/jest`
 Expected: PASS, all tests across all files
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/routes/ghlProvider.js src/routes/ghlProvider.test.js src/server.js package.json package-lock.json
 git commit -m "feat: add GHL checkout iframe page, charge endpoint, and queryUrl verify handler"
 ```
@@ -923,7 +917,6 @@ Remove the `PAYMENT_PROVIDER_SHARED_SECRET` block from `.env` and `.env.example`
 - [ ] **Step 4: Run the full suite and boot the server**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 node_modules/.bin/jest
 (node src/server.js &) && sleep 1.5 && curl -s http://localhost:3000/api/health && curl -s http://localhost:3000/ghl-provider/checkout | head -5; pkill -f "node src/server.js"
 ```
@@ -933,7 +926,6 @@ Expected: all tests pass; health check 200; `/ghl-provider/checkout` returns the
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/arunkemer/DIGI5Y/GHL-NUVEI
 git add src/routes/ghl.js src/server.js .env.example
 git commit -m "refactor: remove spec-mismatched checkout routes, replaced by /ghl-provider/*"
 ```
