@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const NuveiClient = require('../services/nuveiClient');
 const { verifyApiKey } = require('../services/ghlProviderConfig');
+const { getTransactionAmount } = require('../services/ghlTransactionsClient');
 const { createRateLimiter, redactErrorDetails, timingSafeEqual } = require('../lib/security');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
@@ -72,7 +73,7 @@ router.get('/checkout', (_req, res) => {
   // is unusable here; CSP frame-ancestors allowlists GHL's origins instead.
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com; default-src 'self'; script-src 'self' 'unsafe-inline'"
+    "frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com; default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
   );
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -165,10 +166,18 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
     amount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv
   } = req.body;
 
-  // transactionId binds this charge to the GHL transaction it is paying for.
-  // Without it /query cannot reconcile, so it is required up front.
+  // transactionId binds this charge to the GHL transaction it is paying for,
+  // and — critically — is the identifier the amount check below is keyed on.
+  // Without it /query cannot reconcile either, so it is required up front.
   if (!transactionId) {
     return res.status(400).json({ error: 'Missing transactionId' });
+  }
+
+  // locationId is required so the charged amount can be verified against
+  // GHL's own transaction record below (identifies which GHL account/OAuth
+  // token to look it up with).
+  if (!locationId) {
+    return res.status(400).json({ error: 'Missing locationId' });
   }
 
   if (!amount || !ccNumber || !ccExpMonth || !ccExpYear || !ccCvv) {
@@ -180,11 +189,33 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Invalid amount' });
   }
 
+  // Verify the requested amount against GHL's own record of THIS
+  // transactionId — not a client-supplied orderId. GHL's real queryUrl
+  // verify call only ever sends transactionId (never orderId or amount), so
+  // transactionId is the one identifier actually anchored to something GHL
+  // will later check; keying the amount lookup on anything else (e.g. an
+  // orderId supplied in this same untrusted request) would let a caller
+  // bind an unrelated, cheaper transaction's amount to a victim's real
+  // transactionId and still have it confirmed as paid in full.
+  try {
+    const transactionAmount = await getTransactionAmount(locationId, transactionId);
+    if (Math.abs(transactionAmount - numericAmount) > 0.01) {
+      console.warn(
+        `[GHL Provider Charge] Amount mismatch — requested=${numericAmount} ghlTransactionAmount=${transactionAmount} ` +
+        `transactionId=${transactionId}`
+      );
+      return res.status(400).json({ error: 'Amount does not match GHL transaction' });
+    }
+  } catch (error) {
+    console.error('[GHL Provider Charge] Transaction verification failed:', error.message);
+    return res.status(error.statusCode || 502).json({ error: 'Unable to verify transaction with GHL' });
+  }
+
   const mode = resolveChargeMode(publishableKey);
   const nuvei = new NuveiClient(nuveiConfigForMode(mode));
 
   try {
-    const result = await nuvei.createPayment({ amount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv });
+    const result = await nuvei.createPayment({ amount: numericAmount, firstName, lastName, ccNumber, ccExpMonth, ccExpYear, ccCvv });
     const chargeId = crypto.randomUUID();
     charges.set(chargeId, {
       status: 'success',
@@ -226,21 +257,23 @@ router.post('/query', (req, res) => {
 
   // Reconciliation: the chargeId is bound to the GHL transactionId recorded at
   // /charge time, and both must match before this charge is confirmed. That
-  // binding is what closes the order-substitution risk — without it, anyone
-  // could run a $0.01 charge of their own and post its chargeId back to GHL as
-  // the success response for an unrelated, much larger order.
+  // binding, combined with the order-amount verification in /charge (which
+  // fetches the order's real amount from GHL before ever calling the payment
+  // gateway), is what closes the order-substitution risk — without both,
+  // someone could run a cheap charge of their own and post its chargeId back
+  // to GHL as the success response for an unrelated, much larger order.
   //
-  // Amount reconciliation specifically remains out of reach: GHL's verify
-  // request carries no amount field, so we cannot re-check the charged amount
-  // against what GHL believes it initiated. That is a limitation of GHL's
-  // documented protocol, not something fixable here; the amount validation in
-  // /charge and the event.source check in the checkout page's postMessage
-  // listener are the other achievable hardening for this phase.
+  // charge.mode must also match the mode the caller's apiKey authenticated
+  // as: without this, a charge that correctly failed closed to the sandbox
+  // (e.g. because the live/test publishableKey env vars drifted out of sync
+  // with what's actually registered with GHL) could still be confirmed to
+  // GHL via the live apiKey as a real, successful payment — even though no
+  // real money moved.
   //
-  // A transactionId mismatch is deliberately reported identically to an unknown
-  // chargeId, so the response never discloses which of the two failed.
+  // A transactionId or mode mismatch is deliberately reported identically to
+  // an unknown chargeId, so the response never discloses which check failed.
   const charge = charges.get(chargeId);
-  if (charge && charge.status === 'success' && charge.transactionId === transactionId) {
+  if (charge && charge.status === 'success' && charge.transactionId === transactionId && charge.mode === mode) {
     return res.status(200).json({ success: true });
   }
   return res.status(200).json({ success: false });

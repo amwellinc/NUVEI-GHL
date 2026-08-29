@@ -4,11 +4,13 @@ const bodyParser = require('body-parser');
 
 jest.mock('../services/ghlProviderConfig', () => ({ verifyApiKey: jest.fn() }));
 jest.mock('../services/nuveiClient');
+jest.mock('../services/ghlTransactionsClient', () => ({ getTransactionAmount: jest.fn() }));
 
 // Re-required fresh per test (see beforeEach) so each test gets its own
 // charges Map and its own rate-limiter window instead of sharing module state.
 let verifyApiKey;
 let NuveiClient;
+let getTransactionAmount;
 let ghlProviderRoutes;
 
 const LIVE_PUB_KEY = 'live-pub-key';
@@ -45,8 +47,14 @@ beforeEach(() => {
   jest.resetModules();
   verifyApiKey = require('../services/ghlProviderConfig').verifyApiKey;
   NuveiClient = require('../services/nuveiClient');
+  getTransactionAmount = require('../services/ghlTransactionsClient').getTransactionAmount;
   ghlProviderRoutes = require('./ghlProvider');
   NuveiClient.mockClear();
+  getTransactionAmount.mockReset();
+  // Default: GHL's transaction record agrees with whatever amount the test
+  // charges — individual tests override this to exercise the
+  // mismatch/failure paths.
+  getTransactionAmount.mockResolvedValue(25);
 });
 
 afterEach(() => {
@@ -67,6 +75,8 @@ function cardPayload(overrides = {}) {
   return {
     publishableKey: TEST_PUB_KEY,
     transactionId: 'ghl-txn-1',
+    orderId: 'order-1',
+    locationId: 'loc-1',
     amount: 25,
     firstName: 'Jane',
     lastName: 'Doe',
@@ -113,12 +123,16 @@ describe('GET /ghl-provider/checkout', () => {
 });
 
 describe('POST /ghl-provider/query', () => {
-  test('type=verify returns {success:true} when the apiKey matches and a charge with that id and transactionId is known', async () => {
-    verifyApiKey.mockReturnValue(true);
+  test('type=verify returns {success:true} when the apiKey matches (for the charge\'s own mode) and a charge with that id and transactionId is known', async () => {
+    // cardPayload() below defaults to the test publishableKey, so the charge
+    // it creates is mode:'test' — the verifying apiKey must match that same
+    // mode, matching /query's new charge.mode === mode requirement.
+    verifyApiKey.mockImplementation((_key, mode) => mode === 'test');
     const app = buildApp();
 
     // First, create a charge via /charge so the query route has something to verify against.
     mockSuccessfulSale();
+    getTransactionAmount.mockResolvedValueOnce(10);
     const chargeRes = await request(app)
       .post('/ghl-provider/charge')
       .send(cardPayload({ transactionId: 'ghl-txn-1', amount: 10 }));
@@ -126,7 +140,7 @@ describe('POST /ghl-provider/query', () => {
     const { chargeId } = chargeRes.body;
 
     const res = await request(app).post('/ghl-provider/query').send({
-      type: 'verify', transactionId: 'ghl-txn-1', apiKey: 'whatever-verifyApiKey-mock-accepts', chargeId
+      type: 'verify', transactionId: 'ghl-txn-1', apiKey: 'test-apikey', chargeId
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
@@ -137,6 +151,7 @@ describe('POST /ghl-provider/query', () => {
     const app = buildApp();
 
     mockSuccessfulSale();
+    getTransactionAmount.mockResolvedValueOnce(0.01);
     const chargeRes = await request(app)
       .post('/ghl-provider/charge')
       .send(cardPayload({ transactionId: 'attacker-own-txn', amount: 0.01 }));
@@ -147,6 +162,28 @@ describe('POST /ghl-provider/query', () => {
     // replayed as the success response for a different, larger GHL transaction.
     const res = await request(app).post('/ghl-provider/query').send({
       type: 'verify', transactionId: 'victims-large-order-txn', apiKey: 'ok', chargeId
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: false });
+  });
+
+  test('type=verify returns {success:false} when the charge is real and the transactionId matches, but it was a test-mode charge and the verifying apiKey is live', async () => {
+    verifyApiKey.mockImplementation((_key, mode) => mode === 'test');
+    const app = buildApp();
+
+    mockSuccessfulSale();
+    const chargeRes = await request(app)
+      .post('/ghl-provider/charge')
+      .send(cardPayload({ publishableKey: TEST_PUB_KEY, transactionId: 'ghl-txn-mode-mismatch' }));
+    expect(chargeRes.status).toBe(200);
+    const { chargeId } = chargeRes.body;
+
+    // Simulate the live apiKey verifying this call (e.g. because the
+    // publishableKey env vars drifted out of sync with GHL's registration) —
+    // this must NOT confirm a charge that actually ran against the sandbox.
+    verifyApiKey.mockImplementation((_key, mode) => mode === 'live');
+    const res = await request(app).post('/ghl-provider/query').send({
+      type: 'verify', apiKey: 'live-apikey', chargeId, transactionId: 'ghl-txn-mode-mismatch'
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: false });
@@ -217,6 +254,75 @@ describe('POST /ghl-provider/charge', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/transactionId/);
+    expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when locationId is missing, without touching the gateway or GHL', async () => {
+    const createPayment = mockSuccessfulSale();
+
+    const payload = cardPayload();
+    delete payload.locationId;
+    const res = await request(buildApp()).post('/ghl-provider/charge').send(payload);
+
+    expect(res.status).toBe(400);
+    expect(createPayment).not.toHaveBeenCalled();
+    expect(getTransactionAmount).not.toHaveBeenCalled();
+  });
+
+  test('verifies the amount against GHL\'s transaction record keyed by transactionId — NOT by the client-supplied orderId', async () => {
+    // This is the actual regression test for the order-substitution bug: an
+    // orderId alone must never be trusted for the amount check, because it
+    // is just as attacker-controlled as amount itself. Only transactionId —
+    // the one field GHL's real queryUrl verify call actually sends back —
+    // may anchor the lookup.
+    const createPayment = mockSuccessfulSale();
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockResolvedValueOnce(25);
+
+    const res = await request(buildApp())
+      .post('/ghl-provider/charge')
+      .send(cardPayload({ transactionId: 'ghl-txn-real', orderId: 'attacker-supplied-order-id', amount: 25 }));
+
+    expect(res.status).toBe(200);
+    expect(getTransactionAmount).toHaveBeenCalledWith('loc-1', 'ghl-txn-real');
+    expect(getTransactionAmount).not.toHaveBeenCalledWith(expect.anything(), 'attacker-supplied-order-id');
+  });
+
+  test('rejects with 400 when the requested amount does not match GHL\'s own transaction record, without ever calling the gateway', async () => {
+    const createPayment = mockSuccessfulSale();
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockResolvedValueOnce(5000); // the real transaction is $5,000...
+
+    // ...but the caller (who legitimately owns this transactionId) tries to
+    // pay only a fraction of it.
+    const res = await request(buildApp())
+      .post('/ghl-provider/charge')
+      .send(cardPayload({ amount: 0.01 }));
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/does not match/i);
+    expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  test('accepts a requested amount within a cent of the transaction amount (float rounding tolerance)', async () => {
+    const createPayment = mockSuccessfulSale();
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockResolvedValueOnce(25.004); // e.g. floating point artifact from GHL's side
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send(cardPayload({ amount: 25 }));
+
+    expect(res.status).toBe(200);
+    expect(createPayment).toHaveBeenCalled();
+  });
+
+  test('returns 502 and does not call the gateway when GHL transaction verification itself fails', async () => {
+    const createPayment = mockSuccessfulSale();
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockRejectedValueOnce({ statusCode: 502, message: 'Failed to verify transaction with GHL' });
+
+    const res = await request(buildApp()).post('/ghl-provider/charge').send(cardPayload());
+
+    expect(res.status).toBe(502);
     expect(createPayment).not.toHaveBeenCalled();
   });
 
