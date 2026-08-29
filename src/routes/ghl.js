@@ -72,8 +72,9 @@ const validateGHLConfig = (req, res, next) => {
  */
 router.get('/status', validateGHLConfig, async (_req, res) => {
   try {
-    const locationData = await ghlClient.getLocation();
-    
+    const response = await ghlClient.getLocation();
+    const locationData = response.location || response;
+
     res.status(200).json({
       success: true,
       message: 'GHL integration active',
@@ -270,24 +271,25 @@ Time: ${new Date().toISOString()}`;
  */
 router.get('/contacts', validateGHLConfig, async (req, res) => {
   try {
-    const filters = {
-      limit: req.query.limit || 100,
-      offset: req.query.offset || 0
-    };
+    // GHL v2 Contacts API uses cursor-based pagination (startAfterId/startAfter),
+    // not offset — sending offset gets a 422 "property offset should not exist".
+    const filters = { limit: req.query.limit || 100 };
+    if (req.query.startAfterId) filters.startAfterId = req.query.startAfterId;
+    if (req.query.startAfter) filters.startAfter = req.query.startAfter;
 
     const contactsResponse = await ghlClient.getContacts(filters);
 
     res.status(200).json({
       success: true,
       contacts: contactsResponse.contacts || [],
-      totalCount: contactsResponse.totalCount || 0
+      totalCount: contactsResponse.totalCount || contactsResponse.contacts?.length || 0
     });
   } catch (error) {
-    console.error('GHL contacts fetch error:', error);
+    console.error('GHL contacts fetch error:', error.message, redactErrorDetails(error.details));
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      details: error.details
+      details: redactErrorDetails(error.details)
     });
   }
 });
