@@ -36,9 +36,6 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/ghl', ghlRoutes);
 app.use('/oauth', oauthRoutes);
 app.use('/ghl-provider', ghlProviderRoutes);
-// Clean URLs for GHL Payment Provider registration (no "ghl" in path)
-app.use('/api', ghlRoutes);  // → /api/checkout, /api/query, /api/webhook
-app.use('/', ghlRoutes);     // → /pay/:sessionId, /pay/:sessionId/process
 
 // 404 handler
 app.use((req, res) => {
