@@ -85,8 +85,9 @@ router.get('/checkout', (_req, res) => {
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px}
     label{display:block;font-size:13px;font-weight:600;margin-top:12px}
-    input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px}
+    input::placeholder{color:#aaa}
+    .row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
     button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px}
     button:disabled{background:#a78bfa}
   </style>
@@ -94,13 +95,18 @@ router.get('/checkout', (_req, res) => {
 <body>
   <div id="summary"></div>
   <form id="pf">
-    <label>Cardholder Name</label><input id="cardName" required/>
-    <label>Card Number</label><input id="ccNumber" required inputmode="numeric" maxlength="19"/>
+    <label>Cardholder Name</label><input id="cardName" required placeholder="Name on card"/>
+    <label>Card Number</label><input id="ccNumber" required inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456"/>
     <div class="row">
-      <div><label>Expiry Month</label><input id="ccExpMonth" required inputmode="numeric" maxlength="2"/></div>
-      <div><label>Expiry Year</label><input id="ccExpYear" required inputmode="numeric" maxlength="4"/></div>
+      <div>
+        <label>Expiry</label>
+        <input id="ccExpiry" required inputmode="numeric" maxlength="5" placeholder="MM/YY" pattern="\\d{2}/\\d{2}"/>
+      </div>
+      <div>
+        <label>CVV</label>
+        <input id="ccCvv" required inputmode="numeric" maxlength="4" placeholder="CVV"/>
+      </div>
     </div>
-    <label>CVV</label><input id="ccCvv" required inputmode="numeric" maxlength="4"/>
     <button type="submit" id="pb">Pay</button>
   </form>
   <script>
@@ -117,12 +123,23 @@ router.get('/checkout', (_req, res) => {
 
     window.parent.postMessage({ type: 'custom_provider_ready', loaded: true }, '*');
 
+    // Auto-insert the "/" as the shopper types MMYY, matching the MM/YY
+    // placeholder — BaseCommerce itself wants month and a full 4-digit year
+    // as separate fields (see the submit handler below), but MM/YY is the
+    // format every real card form trains people to expect.
+    document.getElementById('ccExpiry').addEventListener('input', function () {
+      let v = this.value.replace(/\\D/g, '').slice(0, 4);
+      if (v.length >= 3) v = v.slice(0, 2) + '/' + v.slice(2);
+      this.value = v;
+    });
+
     document.getElementById('pf').addEventListener('submit', async function (e) {
       e.preventDefault();
       if (!paymentProps) return;
       document.getElementById('pb').disabled = true;
 
       const nameParts = document.getElementById('cardName').value.trim().split(' ');
+      const [expMonth, expYY] = document.getElementById('ccExpiry').value.split('/');
       try {
         const res = await fetch('/ghl-provider/charge', {
           method: 'POST',
@@ -138,8 +155,10 @@ router.get('/checkout', (_req, res) => {
             firstName: nameParts[0] || 'Customer',
             lastName: nameParts.slice(1).join(' ') || 'N/A',
             ccNumber: document.getElementById('ccNumber').value.replace(/\\s/g, ''),
-            ccExpMonth: document.getElementById('ccExpMonth').value,
-            ccExpYear: document.getElementById('ccExpYear').value,
+            ccExpMonth: expMonth,
+            // BaseCommerce requires the full 4-digit year — expand the
+            // 2-digit year the form collects (e.g. "27" -> "2027").
+            ccExpYear: expYY ? '20' + expYY : '',
             ccCvv: document.getElementById('ccCvv').value
           })
         });
