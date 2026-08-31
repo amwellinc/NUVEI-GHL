@@ -174,6 +174,10 @@ class NuveiClient {
 
   /**
    * Refund a settled transaction (full or partial).
+   * CONFIRMED LIVE 2026-08-31: BaseCommerce rejects this with "Can not
+   * REFUND a transaction with status of CAPTURED" for same-day
+   * not-yet-settled transactions — use voidPayment() instead until the
+   * nightly settlement batch has run.
    * @param {Object} refundData - Refund information
    * @returns {Promise<Object>} - { transactionId, status, raw }
    */
@@ -190,11 +194,10 @@ class NuveiClient {
   }
 
   /**
-   * Void an un-settled transaction.
-   * NOTE: lower confidence than createPayment/refund — the reference
-   * implementation above defines the VOID transaction-type constant but
-   * never exercises it, so this shape is inferred by analogy with refund,
-   * not directly observed. Verify against a real test transaction.
+   * Void an un-settled transaction — this is the correct way to reverse a
+   * same-day CAPTURED transaction; refundPayment() rejects those (see its
+   * comment). CONFIRMED LIVE 2026-08-31: real production transaction voided
+   * successfully, response status VOIDED.
    * @param {Object} voidData - Void information
    * @returns {Promise<Object>} - { transactionId, status, raw }
    */
