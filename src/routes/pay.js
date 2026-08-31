@@ -5,7 +5,7 @@ const NuveiClient = require('../services/nuveiClient');
 const { createCheckoutSession } = require('../services/stripeClient');
 const { verifyLink } = require('../lib/paymentLinks');
 const { notifyGHL } = require('../lib/ghlNotify');
-const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect } = require('../lib/security');
+const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 // Looser than the charge limiter, but GET /pay creates a session on every
@@ -17,11 +17,7 @@ const pageRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
 // one of these origins — otherwise the request that created the link could
 // send a paying customer's browser anywhere after a real charge completes.
 // Configure with the site(s) that actually embed these payment links.
-const ALLOWED_REDIRECT_ORIGINS = (process.env.PAYMENT_LINK_ALLOWED_REDIRECT_ORIGINS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .concat(process.env.APP_URL ? [process.env.APP_URL] : []);
+const ALLOWED_REDIRECT_ORIGINS = getAllowedRedirectOrigins();
 
 // Phase 1: in-memory session store, same TTL/eviction pattern already used
 // for GHL provider charges — see src/routes/ghlProvider.js.

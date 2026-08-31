@@ -47,6 +47,21 @@ function timingSafeEqual(a, b) {
 }
 
 /**
+ * The site origin(s) trusted to interact with the payment system — both as
+ * a successUrl/failureUrl redirect target (see isAllowedRedirect) and, for
+ * routes/checkoutLink.js, as a CORS caller allowed to mint payment links
+ * directly from a storefront's cart. Single source of truth so the two
+ * trust boundaries can't drift apart.
+ */
+function getAllowedRedirectOrigins() {
+  return (process.env.PAYMENT_LINK_ALLOWED_REDIRECT_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .concat(process.env.APP_URL ? [process.env.APP_URL] : []);
+}
+
+/**
  * Validates a redirect target is an absolute URL on one of the allowed
  * origins, to prevent open-redirect via attacker-supplied successUrl/failureUrl.
  */
@@ -87,4 +102,4 @@ function createRateLimiter({ windowMs, max }) {
   };
 }
 
-module.exports = { escapeHtml, redactErrorDetails, timingSafeEqual, isAllowedRedirect, createRateLimiter };
+module.exports = { escapeHtml, redactErrorDetails, timingSafeEqual, isAllowedRedirect, createRateLimiter, getAllowedRedirectOrigins };

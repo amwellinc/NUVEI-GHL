@@ -152,6 +152,24 @@ class GHLClient {
   }
 
   /**
+   * Create-or-update a contact by email/phone (v2 API) — used to resolve a
+   * checkout email to a GHL contact id server-side, rather than trusting a
+   * contactId supplied directly by a public caller (which would let anyone
+   * tag an arbitrary existing contact as having paid).
+   * @param {{email?: string, phone?: string, firstName?: string, lastName?: string}} contactData
+   * @returns {Promise<Object>} - { contact: {...}, new: boolean }
+   */
+  async upsertContact(contactData) {
+    return this.makeRequest('POST', '/contacts/upsert', {
+      locationId: this.locationId,
+      email: contactData.email,
+      phone: contactData.phone,
+      firstName: contactData.firstName,
+      lastName: contactData.lastName
+    });
+  }
+
+  /**
    * Associate a contact to a company (one-to-many support)
    * @param {string} contactId - Contact ID
    * @param {string} companyId - Company ID
