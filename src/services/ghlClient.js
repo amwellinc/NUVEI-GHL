@@ -170,6 +170,27 @@ class GHLClient {
   }
 
   /**
+   * Create an opportunity (v2 API) — used to place a completed order or an
+   * abandoned cart into a sales pipeline for fulfillment/follow-up staff to
+   * work, since GHL has no public API to create a native Payments "Order".
+   * @param {{pipelineId: string, pipelineStageId: string, contactId: string, name: string, monetaryValue?: number, status?: string, source?: string, customFields?: Array}} data
+   * @returns {Promise<Object>} - the created opportunity
+   */
+  async createOpportunity(data) {
+    return this.makeRequest('POST', '/opportunities/', {
+      locationId: this.locationId,
+      pipelineId: data.pipelineId,
+      pipelineStageId: data.pipelineStageId,
+      contactId: data.contactId,
+      name: data.name,
+      monetaryValue: data.monetaryValue,
+      status: data.status || 'open',
+      source: data.source,
+      customFields: data.customFields || []
+    });
+  }
+
+  /**
    * Associate a contact to a company (one-to-many support)
    * @param {string} contactId - Contact ID
    * @param {string} companyId - Company ID

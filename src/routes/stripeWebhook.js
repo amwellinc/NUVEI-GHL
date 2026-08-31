@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { constructWebhookEvent } = require('../services/stripeClient');
 const { notifyGHL } = require('../lib/ghlNotify');
+const { resolveContactId } = require('../lib/ghlContact');
+const { createOrderOpportunity } = require('../lib/ghlOrders');
 
 // Stripe retries webhook delivery on any non-2xx response or timeout — this
 // is expected, documented behavior, not a failure — so a duplicate delivery
@@ -50,12 +52,24 @@ router.post('/', async (req, res) => {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     if (session.payment_status === 'paid') {
-      const contactId = session.metadata?.contactId || '';
       const transactionId = session.payment_intent || session.id;
       const amount = (session.amount_total / 100).toFixed(2);
       const currency = (session.currency || 'usd').toUpperCase();
+      const description = session.metadata?.description || '';
+
+      // The signed link's own contactId (set at link-creation time) wins
+      // when present; Stripe's own hosted page always collects an email
+      // even for a fully anonymous "Buy Now" link, so fall back to
+      // resolving a contact from that rather than losing the order/GHL
+      // tie-in entirely.
+      let contactId = session.metadata?.contactId || '';
+      if (!contactId && session.customer_details?.email) {
+        const [firstName, ...rest] = (session.customer_details.name || '').split(' ');
+        contactId = await resolveContactId(session.customer_details.email, firstName, rest.join(' '));
+      }
 
       await notifyGHL(contactId, { transactionId, amount, currency });
+      await createOrderOpportunity({ contactId, description, amount, transactionId });
       console.log(`[Stripe Webhook] Payment confirmed — session=${session.id} amount=${amount} ${currency}`);
     }
   }

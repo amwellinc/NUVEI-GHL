@@ -3,7 +3,7 @@ const router = express.Router();
 const cors = require('cors');
 const { createSignedLink } = require('../lib/paymentLinks');
 const { createRateLimiter, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
-const GHLClient = require('../services/ghlClient');
+const { resolveContactId } = require('../lib/ghlContact');
 
 const ALLOWED_ORIGINS = getAllowedRedirectOrigins();
 const MAX_DESCRIPTION_LENGTH = 200;
@@ -25,30 +25,6 @@ const corsOptions = {
 };
 
 const createLinkRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 30 });
-
-const ghlClient = new GHLClient({
-  locationId: process.env.GHL_LOCATION_ID,
-  apiToken: process.env.GHL_API_TOKEN,
-  apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://services.leadconnectorhq.com'
-});
-
-/**
- * Best-effort: resolves a checkout email (+ optional name) to a GHL contact
- * id via upsert, so the eventual payment can be tied to the right CRM
- * contact even though the cart never has a contactId to hand. Returns ''
- * (never throws) on any failure — a CRM hiccup must never block checkout,
- * and the payment link is still fully valid without a contactId.
- */
-async function resolveContactId(email, firstName, lastName) {
-  if (!email || !process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) return '';
-  try {
-    const result = await ghlClient.upsertContact({ email, firstName, lastName });
-    return result?.contact?.id || result?.id || '';
-  } catch (error) {
-    console.warn('[Checkout Link] Contact resolution failed:', error.message);
-    return '';
-  }
-}
 
 router.use(cors(corsOptions));
 

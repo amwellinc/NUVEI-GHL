@@ -3,9 +3,13 @@ const express = require('express');
 
 jest.mock('../services/stripeClient');
 jest.mock('../lib/ghlNotify');
+jest.mock('../lib/ghlContact');
+jest.mock('../lib/ghlOrders');
 
 let stripeClient;
 let ghlNotify;
+let ghlContact;
+let ghlOrders;
 let stripeWebhookRoutes;
 
 beforeEach(() => {
@@ -13,6 +17,10 @@ beforeEach(() => {
   stripeClient = require('../services/stripeClient');
   ghlNotify = require('../lib/ghlNotify');
   ghlNotify.notifyGHL.mockResolvedValue(undefined);
+  ghlContact = require('../lib/ghlContact');
+  ghlContact.resolveContactId.mockResolvedValue('');
+  ghlOrders = require('../lib/ghlOrders');
+  ghlOrders.createOrderOpportunity.mockResolvedValue(undefined);
   stripeWebhookRoutes = require('./stripeWebhook');
 });
 
@@ -120,13 +128,52 @@ describe('POST /pay/stripe/webhook', () => {
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', expect.objectContaining({ transactionId: 'cs_test_2' }));
   });
 
-  test('a payment with no contactId in metadata still acknowledges 200 (notifyGHL itself is a no-op without a contactId)', async () => {
+  test('a payment with no contactId in metadata and no customer email still acknowledges 200 (notifyGHL is a no-op without a contactId)', async () => {
     const app = buildApp();
     stripeClient.constructWebhookEvent.mockReturnValue(checkoutCompletedEvent({ metadata: {} }));
 
     const res = await post(app);
 
     expect(res.status).toBe(200);
+    expect(ghlContact.resolveContactId).not.toHaveBeenCalled();
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('', expect.any(Object));
+  });
+
+  test('resolves a contact from Stripe-collected customer details when the link had no contactId', async () => {
+    const app = buildApp();
+    ghlContact.resolveContactId.mockResolvedValueOnce('resolved-contact');
+    stripeClient.constructWebhookEvent.mockReturnValue(
+      checkoutCompletedEvent({ metadata: {}, customer_details: { email: 'shopper@example.com', name: 'Ada Lovelace' } })
+    );
+
+    await post(app);
+
+    expect(ghlContact.resolveContactId).toHaveBeenCalledWith('shopper@example.com', 'Ada', 'Lovelace');
+    expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('resolved-contact', expect.any(Object));
+  });
+
+  test('places a confirmed payment into the configured GHL order pipeline', async () => {
+    const app = buildApp();
+    stripeClient.constructWebhookEvent.mockReturnValue(
+      checkoutCompletedEvent({ metadata: { contactId: 'contact-1', description: 'Cart total (2 items)' } })
+    );
+
+    await post(app);
+
+    expect(ghlOrders.createOrderOpportunity).toHaveBeenCalledWith({
+      contactId: 'contact-1',
+      description: 'Cart total (2 items)',
+      amount: '49.99',
+      transactionId: 'pi_123'
+    });
+  });
+
+  test('never places an abandoned or unconfirmed payment into the order pipeline', async () => {
+    const app = buildApp();
+    stripeClient.constructWebhookEvent.mockReturnValue(checkoutCompletedEvent({ payment_status: 'unpaid' }));
+
+    await post(app);
+
+    expect(ghlOrders.createOrderOpportunity).not.toHaveBeenCalled();
   });
 });
