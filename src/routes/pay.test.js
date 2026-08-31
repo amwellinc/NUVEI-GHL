@@ -4,9 +4,11 @@ const bodyParser = require('body-parser');
 
 jest.mock('../services/nuveiClient');
 jest.mock('../services/ghlClient');
+jest.mock('../services/stripeClient');
 
 let NuveiClient;
 let GHLClient;
+let stripeClient;
 let createSignedLink;
 let payRoutes;
 let ghlMocks;
@@ -52,6 +54,9 @@ beforeEach(() => {
   ghlMocks = mockGHLClient();
   payRoutes = require('./pay');
   NuveiClient.mockClear();
+
+  stripeClient = require('../services/stripeClient');
+  stripeClient.createCheckoutSession.mockReset();
 });
 
 afterEach(() => {
@@ -94,6 +99,14 @@ describe('GET /pay', () => {
     expect(res.text).toContain('USD 25.00');
     expect(res.text).toContain('Test item');
     expect(res.text).toContain('ccExpiry');
+  });
+
+  test('renders a country selector offering the Nuvei form for US/Canada and a Stripe option for elsewhere', async () => {
+    const res = await request(buildApp()).get('/pay' + signedQuery());
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('id="region"');
+    expect(res.text).toContain('id="stripeBox"');
+    expect(res.text).toContain('/stripe-checkout');
   });
 
   test('escapes a description containing HTML rather than reflecting it raw', async () => {
@@ -296,5 +309,114 @@ describe('POST /pay/:sessionId/charge', () => {
     // other two GHL side effects from still being attempted.
     expect(ghlMocks.setCustomField).toHaveBeenCalled();
     expect(ghlMocks.addTags).toHaveBeenCalled();
+  });
+});
+
+describe('POST /pay/:sessionId/stripe-checkout', () => {
+  async function createSession(app, overrides = {}) {
+    const getRes = await request(app).get('/pay' + signedQuery(overrides));
+    const match = getRes.text.match(/'\/([0-9a-f-]{36})\/charge'/);
+    return match[1];
+  }
+
+  test('creates a Stripe Checkout Session for the amount fixed by the link and returns its URL', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app, { amount: 25, currency: 'USD', description: 'Test item' });
+
+    const res = await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe('https://checkout.stripe.com/cs_1');
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: '25.00', currency: 'USD', description: 'Test item' })
+    );
+  });
+
+  test('returns 404 for an unknown or expired sessionId, without calling Stripe', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+
+    const res = await request(app).post('/pay/00000000-0000-0000-0000-000000000000/stripe-checkout');
+
+    expect(res.status).toBe(404);
+    expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  test('is not single-use like the Nuvei charge endpoint — creating a Checkout Session is not itself a completed payment', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app);
+
+    const first = await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+    const second = await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledTimes(2);
+  });
+
+  test('passes the link contactId through as Stripe session metadata for the webhook to pick up', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app, { contactId: 'contact-789' });
+
+    await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { contactId: 'contact-789' } })
+    );
+  });
+
+  test('appends the Stripe session-id placeholder to an allowed successUrl', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app, { successUrl: 'https://amwellinc.com/thanks' });
+
+    await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ successUrl: 'https://amwellinc.com/thanks?transactionId={CHECKOUT_SESSION_ID}' })
+    );
+  });
+
+  test('falls back to the built-in /pay/stripe/return page when no allowed successUrl/failureUrl is configured', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app);
+
+    await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        successUrl: 'https://am333-nuvei-production.up.railway.app/pay/stripe/return?status=success',
+        cancelUrl: 'https://am333-nuvei-production.up.railway.app/pay/stripe/return?status=cancelled'
+      })
+    );
+  });
+
+  test('propagates a Stripe configuration error as JSON rather than crashing', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockRejectedValue({ statusCode: 500, message: 'STRIPE_SECRET_KEY is not configured' });
+    const sessionId = await createSession(app);
+
+    const res = await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('STRIPE_SECRET_KEY is not configured');
+  });
+});
+
+describe('GET /pay/stripe/return', () => {
+  test('shows a success message when status=success', async () => {
+    const res = await request(buildApp()).get('/pay/stripe/return?status=success');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Payment Successful/);
+  });
+
+  test('shows a cancelled message for any other status', async () => {
+    const res = await request(buildApp()).get('/pay/stripe/return?status=cancelled');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Payment Cancelled/);
   });
 });

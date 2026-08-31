@@ -7,10 +7,17 @@ const ghlRoutes = require('./routes/ghl');
 const oauthRoutes = require('./routes/oauth');
 const ghlProviderRoutes = require('./routes/ghlProvider');
 const payRoutes = require('./routes/pay');
+const stripeWebhookRoutes = require('./routes/stripeWebhook');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// Stripe webhook signature verification needs the exact raw request body,
+// so this must be mounted (and matched) before the global JSON body parser
+// below — once express.json() has parsed and replaced req.body, the raw
+// bytes needed for the signature check are gone.
+app.use('/pay/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
 // Middleware
 app.use(bodyParser.json());

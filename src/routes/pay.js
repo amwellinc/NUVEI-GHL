@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const NuveiClient = require('../services/nuveiClient');
-const GHLClient = require('../services/ghlClient');
+const { createCheckoutSession } = require('../services/stripeClient');
 const { verifyLink } = require('../lib/paymentLinks');
+const { notifyGHL } = require('../lib/ghlNotify');
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect } = require('../lib/security');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
@@ -46,44 +47,6 @@ function nuveiConfig() {
   };
 }
 
-const ghlClient = new GHLClient({
-  locationId: process.env.GHL_LOCATION_ID,
-  apiToken: process.env.GHL_API_TOKEN,
-  apiEndpoint: process.env.GHL_API_ENDPOINT || 'https://services.leadconnectorhq.com'
-});
-
-/**
- * Records a successful payment on its GHL contact (note, custom field, tag)
- * so a workflow can react to it (fulfillment, follow-up, etc.) — best
- * effort: a GHL-side failure here must never fail the payment response,
- * since the charge already succeeded at the gateway. Each side effect is
- * independent so one failing doesn't block the others, matching the same
- * pattern already used in src/routes/ghl.js's /payment/create.
- */
-async function notifyGHL(contactId, { transactionId, amount, currency }) {
-  if (!contactId || !process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) return;
-
-  try {
-    await ghlClient.createNote(contactId, {
-      body: `Payment received: ${currency} ${amount}\nTransaction ID: ${transactionId}\nTime: ${new Date().toISOString()}`
-    });
-  } catch (error) {
-    console.warn('[Pay Link] Failed to create GHL note:', error.message);
-  }
-
-  try {
-    await ghlClient.setCustomField(contactId, 'nuvei_transaction_id', transactionId);
-  } catch (error) {
-    console.warn('[Pay Link] Failed to set GHL custom field:', error.message);
-  }
-
-  try {
-    await ghlClient.addTags(contactId, ['payment-completed']);
-  } catch (error) {
-    console.warn('[Pay Link] Failed to add GHL tag:', error.message);
-  }
-}
-
 /**
  * GET /pay
  * A standalone, GHL-independent hosted checkout page. Reached via a signed
@@ -123,9 +86,12 @@ router.get('/', pageRateLimiter, (req, res) => {
     input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px}
     input::placeholder{color:#aaa}
     .row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
-    button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px}
-    button:disabled{background:#a78bfa}
+    select{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px;background:#fff}
+    button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
+    button:disabled{background:#a78bfa;cursor:default}
     .secure{text-align:center;margin-top:14px;font-size:12px;color:#9ca3af}
+    .stripe-note{font-size:13px;color:#666;margin-top:14px;line-height:1.4}
+    [hidden]{display:none!important}
   </style>
 </head>
 <body>
@@ -134,6 +100,13 @@ router.get('/', pageRateLimiter, (req, res) => {
     <div class="amount">${escapeHtml(currency)} ${escapeHtml(amount)}</div>
     ${description ? `<div class="desc">${escapeHtml(description)}</div>` : ''}
   </div>
+
+  <label>Where are you located?</label>
+  <select id="region">
+    <option value="us_ca">🇺🇸 United States / 🇨🇦 Canada</option>
+    <option value="intl">🌍 Other Country</option>
+  </select>
+
   <form id="pf">
     <label>Cardholder Name</label><input id="cardName" required placeholder="Name on card"/>
     <label>Card Number</label><input id="ccNumber" required inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456"/>
@@ -144,9 +117,41 @@ router.get('/', pageRateLimiter, (req, res) => {
     <label>Email</label><input id="email" type="email" required placeholder="you@example.com"/>
     <button type="submit" id="pb">Pay ${escapeHtml(currency)} ${escapeHtml(amount)}</button>
   </form>
+
+  <div id="stripeBox" hidden>
+    <p class="stripe-note">You'll be securely redirected to our international payment partner to complete this purchase.</p>
+    <button type="button" id="stripeBtn">Continue to Secure Checkout</button>
+  </div>
+
   <p class="secure">🔒 256-bit SSL Encrypted &amp; Secure</p>
 </div>
 <script>
+  const regionSelect = document.getElementById('region');
+  const nuveiForm = document.getElementById('pf');
+  const stripeBox = document.getElementById('stripeBox');
+  regionSelect.addEventListener('change', function () {
+    const isIntl = this.value === 'intl';
+    nuveiForm.hidden = isIntl;
+    stripeBox.hidden = !isIntl;
+  });
+
+  document.getElementById('stripeBtn').addEventListener('click', async function () {
+    this.disabled = true;
+    try {
+      const res = await fetch(window.location.pathname + '/${sessionId}/stripe-checkout', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.url) {
+        window.location.href = body.url;
+        return;
+      }
+      alert(body.error || 'Unable to start checkout. Please try again.');
+      this.disabled = false;
+    } catch (err) {
+      alert('Network error. Please try again.');
+      this.disabled = false;
+    }
+  });
+
   document.getElementById('ccExpiry').addEventListener('input', function () {
     let v = this.value.replace(/\\D/g, '').slice(0, 4);
     if (v.length >= 3) v = v.slice(0, 2) + '/' + v.slice(2);
@@ -254,6 +259,83 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     if (base) return res.redirect(base);
     return res.status(error.statusCode || 500).json({ error: error.message });
   }
+});
+
+/**
+ * POST /pay/:sessionId/stripe-checkout
+ * The international leg — creates a Stripe-hosted Checkout Session for the
+ * amount fixed by the signed link and hands back its URL for the browser to
+ * navigate to. Raw card data never reaches this server for these orders;
+ * Stripe collects it on its own page. The session is intentionally left in
+ * the store (not consumed here) since nothing charge-relevant happens until
+ * the customer completes Stripe's page — confirmation, and the GHL
+ * push-back, happen in routes/stripeWebhook.js once Stripe reports the
+ * payment as paid.
+ */
+router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) => {
+  const session = sessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Payment session not found or expired' });
+  }
+
+  const returnBase = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  const successUrl = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
+    ? `${session.successUrl}${session.successUrl.includes('?') ? '&' : '?'}transactionId={CHECKOUT_SESSION_ID}`
+    : `${returnBase}/pay/stripe/return?status=success`;
+  const cancelUrl = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
+    ? session.failureUrl
+    : `${returnBase}/pay/stripe/return?status=cancelled`;
+
+  try {
+    const checkoutSession = await createCheckoutSession({
+      amount: session.amount,
+      currency: session.currency,
+      description: session.description,
+      successUrl,
+      cancelUrl,
+      metadata: { contactId: session.contactId || '' }
+    });
+    return res.status(200).json({ url: checkoutSession.url });
+  } catch (error) {
+    console.error('[Pay Link] Stripe checkout session creation failed:', error.message);
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Unable to start checkout' });
+  }
+});
+
+/**
+ * GET /pay/stripe/return
+ * Fallback landing page for Stripe's success_url/cancel_url when a payment
+ * link didn't configure its own successUrl/failureUrl — actual payment
+ * confirmation already happened via the webhook by the time a customer can
+ * reach this page.
+ */
+router.get('/stripe/return', pageRateLimiter, (req, res) => {
+  const succeeded = req.query.status === 'success';
+
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+  res.setHeader('X-Frame-Options', 'DENY');
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>${succeeded ? 'Payment Successful' : 'Payment Cancelled'}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.10);max-width:420px;width:100%;padding:32px;text-align:center}
+    h1{font-size:20px;margin-bottom:8px;color:#1a1a2e}
+    p{font-size:14px;color:#666}
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>${succeeded ? '✅ Payment Successful' : 'Payment Cancelled'}</h1>
+  <p>${succeeded ? 'Thank you — your payment has been received.' : 'Your payment was not completed. You can close this page and try again.'}</p>
+</div>
+</body>
+</html>`);
 });
 
 module.exports = router;
