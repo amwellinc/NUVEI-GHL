@@ -141,6 +141,17 @@ class GHLClient {
   }
 
   /**
+   * Add tags to a contact (v2 API) — the standard way to trigger a GHL
+   * workflow ("Tag Added") from outside GHL, e.g. after an external payment.
+   * @param {string} contactId - Contact ID
+   * @param {string[]} tags - Tags to add
+   * @returns {Promise<Object>} - GHL response
+   */
+  async addTags(contactId, tags) {
+    return this.makeRequest('POST', `/contacts/${contactId}/tags`, { tags });
+  }
+
+  /**
    * Associate a contact to a company (one-to-many support)
    * @param {string} contactId - Contact ID
    * @param {string} companyId - Company ID

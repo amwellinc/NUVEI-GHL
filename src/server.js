@@ -6,6 +6,7 @@ const healthRoutes = require('./routes/health');
 const ghlRoutes = require('./routes/ghl');
 const oauthRoutes = require('./routes/oauth');
 const ghlProviderRoutes = require('./routes/ghlProvider');
+const payRoutes = require('./routes/pay');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,6 +37,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/ghl', ghlRoutes);
 app.use('/oauth', oauthRoutes);
 app.use('/ghl-provider', ghlProviderRoutes);
+app.use('/pay', payRoutes);
 
 // 404 handler
 app.use((req, res) => {
