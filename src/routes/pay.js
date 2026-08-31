@@ -43,6 +43,14 @@ function nuveiConfig() {
   };
 }
 
+// Base for the built-in /pay/return fallback page — used whenever a link's
+// successUrl/failureUrl is missing or not on an allowed origin, so a
+// customer is never bounced toward a page that may not exist yet on the
+// storefront (e.g. before it has built its own thank-you page).
+function returnBaseUrl(req) {
+  return process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+}
+
 /**
  * GET /pay
  * A standalone, GHL-independent hosted checkout page. Reached via a signed
@@ -242,18 +250,18 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     // through.
     await notifyGHL(session.contactId, { transactionId: result.transactionId, amount: session.amount, currency: session.currency });
 
-    const base = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS) ? session.successUrl : null;
-    if (base) {
-      const redirectUrl = base.includes('?') ? `${base}&transactionId=${result.transactionId}` : `${base}?transactionId=${result.transactionId}`;
-      return res.redirect(redirectUrl);
-    }
-    return res.status(200).json({ success: true, transactionId: result.transactionId });
+    const successBase = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
+      ? session.successUrl
+      : `${returnBaseUrl(req)}/pay/return?status=success`;
+    const successUrl = successBase.includes('?') ? `${successBase}&transactionId=${result.transactionId}` : `${successBase}?transactionId=${result.transactionId}`;
+    return res.redirect(successUrl);
   } catch (error) {
     console.error('[Pay Link] Charge failed:', error.message, redactErrorDetails(error.details));
 
-    const base = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS) ? session.failureUrl : null;
-    if (base) return res.redirect(base);
-    return res.status(error.statusCode || 500).json({ error: error.message });
+    const failureBase = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
+      ? session.failureUrl
+      : `${returnBaseUrl(req)}/pay/return?status=cancelled`;
+    return res.redirect(failureBase);
   }
 });
 
@@ -274,13 +282,12 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
     return res.status(404).json({ error: 'Payment session not found or expired' });
   }
 
-  const returnBase = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
   const successUrl = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
     ? `${session.successUrl}${session.successUrl.includes('?') ? '&' : '?'}transactionId={CHECKOUT_SESSION_ID}`
-    : `${returnBase}/pay/stripe/return?status=success`;
+    : `${returnBaseUrl(req)}/pay/return?status=success`;
   const cancelUrl = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
     ? session.failureUrl
-    : `${returnBase}/pay/stripe/return?status=cancelled`;
+    : `${returnBaseUrl(req)}/pay/return?status=cancelled`;
 
   try {
     const checkoutSession = await createCheckoutSession({
@@ -299,14 +306,18 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
 });
 
 /**
- * GET /pay/stripe/return
- * Fallback landing page for Stripe's success_url/cancel_url when a payment
- * link didn't configure its own successUrl/failureUrl — actual payment
- * confirmation already happened via the webhook by the time a customer can
- * reach this page.
+ * GET /pay/return
+ * Built-in fallback confirmation page — used by both the Nuvei charge path
+ * and the Stripe checkout path whenever a link's successUrl/failureUrl is
+ * missing or not on an allowed origin, so a customer is never redirected to
+ * a storefront page that may not exist yet (e.g. before wellness111.com has
+ * its own thank-you page built). Once a real successUrl/failureUrl is
+ * configured and reachable, that takes priority over this page automatically
+ * — nothing else needs to change.
  */
-router.get('/stripe/return', pageRateLimiter, (req, res) => {
+router.get('/return', pageRateLimiter, (req, res) => {
   const succeeded = req.query.status === 'success';
+  const transactionId = req.query.transactionId ? escapeHtml(String(req.query.transactionId)) : '';
 
   res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
   res.setHeader('X-Frame-Options', 'DENY');
@@ -323,12 +334,14 @@ router.get('/stripe/return', pageRateLimiter, (req, res) => {
     .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.10);max-width:420px;width:100%;padding:32px;text-align:center}
     h1{font-size:20px;margin-bottom:8px;color:#1a1a2e}
     p{font-size:14px;color:#666}
+    .order-number{margin-top:16px;padding:10px;background:#f8f7ff;border-radius:6px;font-size:13px;color:#374151;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   </style>
 </head>
 <body>
 <div class="card">
   <h1>${succeeded ? '✅ Payment Successful' : 'Payment Cancelled'}</h1>
   <p>${succeeded ? 'Thank you — your payment has been received.' : 'Your payment was not completed. You can close this page and try again.'}</p>
+  ${succeeded && transactionId ? `<div class="order-number">Order #${transactionId}</div>` : ''}
 </div>
 </body>
 </html>`);

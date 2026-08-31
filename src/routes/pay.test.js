@@ -152,7 +152,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '25.00', currency: 'USD' }));
   });
 
@@ -166,7 +166,7 @@ describe('POST /pay/:sessionId/charge', () => {
       amount: 0.01 // attacker-supplied — must be ignored entirely
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '25.00' }));
   });
 
@@ -195,7 +195,7 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(res.headers.location).toBe('https://amwellinc.com/thanks?transactionId=txn-redirect');
   });
 
-  test('does not redirect to a successUrl outside the allowed origins, falls back to JSON', async () => {
+  test('does not redirect to a successUrl outside the allowed origins, falls back to the built-in confirmation page', async () => {
     const app = buildApp();
     mockSuccessfulSale('txn-nofollow');
     const sessionId = await createSession(app, { successUrl: 'https://evil.example.com/steal' });
@@ -204,8 +204,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.transactionId).toBe('txn-nofollow');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=success&transactionId=txn-nofollow');
   });
 
   test('a session cannot be charged twice — a successful charge consumes it', async () => {
@@ -215,7 +215,7 @@ describe('POST /pay/:sessionId/charge', () => {
     const payload = { email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
 
     const first = await request(app).post(`/pay/${sessionId}/charge`).send(payload);
-    expect(first.status).toBe(200);
+    expect(first.status).toBe(302);
     expect(createPayment).toHaveBeenCalledTimes(1);
 
     const second = await request(app).post(`/pay/${sessionId}/charge`).send({ ...payload, ccNumber: '5555555555554444' });
@@ -231,7 +231,8 @@ describe('POST /pay/:sessionId/charge', () => {
     const payload = { email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
 
     const first = await request(app).post(`/pay/${sessionId}/charge`).send(payload);
-    expect(first.status).toBe(402);
+    expect(first.status).toBe(302);
+    expect(first.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
 
     const second = await request(app).post(`/pay/${sessionId}/charge`).send({ ...payload, ccNumber: '5555555555554444' });
     expect(second.status).toBe(404);
@@ -249,7 +250,7 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(createPayment).not.toHaveBeenCalled();
   });
 
-  test('a decline redirects to failureUrl when allowed, otherwise returns the gateway error as JSON', async () => {
+  test('a decline redirects to failureUrl when allowed', async () => {
     const app = buildApp();
     const createPayment = jest.fn().mockRejectedValue({ statusCode: 402, message: 'No such Issuer' });
     NuveiClient.mockImplementation(() => ({ createPayment }));
@@ -263,6 +264,20 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(res.headers.location).toBe('https://amwellinc.com/failed');
   });
 
+  test('a decline falls back to the built-in confirmation page when no allowed failureUrl is configured', async () => {
+    const app = buildApp();
+    const createPayment = jest.fn().mockRejectedValue({ statusCode: 402, message: 'No such Issuer' });
+    NuveiClient.mockImplementation(() => ({ createPayment }));
+    const sessionId = await createSession(app);
+
+    const res = await request(app).post(`/pay/${sessionId}/charge`).send({
+      email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
+    });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
+  });
+
   test('a successful charge with a contactId on the link records a note, custom field, and tag on that GHL contact', async () => {
     const app = buildApp();
     mockSuccessfulSale('txn-ghl');
@@ -272,7 +287,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
     expect(ghlMocks.createNote).toHaveBeenCalledWith('contact-123', expect.objectContaining({ body: expect.stringContaining('txn-ghl') }));
     expect(ghlMocks.setCustomField).toHaveBeenCalledWith('contact-123', 'nuvei_transaction_id', 'txn-ghl');
     expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-123', ['payment-completed']);
@@ -287,7 +302,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
     expect(ghlMocks.createNote).not.toHaveBeenCalled();
     expect(ghlMocks.setCustomField).not.toHaveBeenCalled();
     expect(ghlMocks.addTags).not.toHaveBeenCalled();
@@ -303,8 +318,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.transactionId).toBe('txn-ghl-fail');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toContain('transactionId=txn-ghl-fail');
     // The independently-failing note creation must not have blocked the
     // other two GHL side effects from still being attempted.
     expect(ghlMocks.setCustomField).toHaveBeenCalled();
@@ -380,7 +395,7 @@ describe('POST /pay/:sessionId/stripe-checkout', () => {
     );
   });
 
-  test('falls back to the built-in /pay/stripe/return page when no allowed successUrl/failureUrl is configured', async () => {
+  test('falls back to the built-in /pay/return page when no allowed successUrl/failureUrl is configured', async () => {
     const app = buildApp();
     stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
     const sessionId = await createSession(app);
@@ -389,8 +404,8 @@ describe('POST /pay/:sessionId/stripe-checkout', () => {
 
     expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        successUrl: 'https://am333-nuvei-production.up.railway.app/pay/stripe/return?status=success',
-        cancelUrl: 'https://am333-nuvei-production.up.railway.app/pay/stripe/return?status=cancelled'
+        successUrl: 'https://am333-nuvei-production.up.railway.app/pay/return?status=success',
+        cancelUrl: 'https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled'
       })
     );
   });
@@ -407,16 +422,29 @@ describe('POST /pay/:sessionId/stripe-checkout', () => {
   });
 });
 
-describe('GET /pay/stripe/return', () => {
+describe('GET /pay/return', () => {
   test('shows a success message when status=success', async () => {
-    const res = await request(buildApp()).get('/pay/stripe/return?status=success');
+    const res = await request(buildApp()).get('/pay/return?status=success');
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Payment Successful/);
   });
 
-  test('shows a cancelled message for any other status', async () => {
-    const res = await request(buildApp()).get('/pay/stripe/return?status=cancelled');
+  test('shows the order number when a transactionId is present', async () => {
+    const res = await request(buildApp()).get('/pay/return?status=success&transactionId=txn-order-99');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Order #txn-order-99');
+  });
+
+  test('escapes a transactionId rather than reflecting it raw', async () => {
+    const res = await request(buildApp()).get('/pay/return?status=success&transactionId=' + encodeURIComponent('<script>alert(1)</script>'));
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('<script>alert(1)</script>');
+  });
+
+  test('shows a cancelled message for any other status, with no order number', async () => {
+    const res = await request(buildApp()).get('/pay/return?status=cancelled');
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Payment Cancelled/);
+    expect(res.text).not.toContain('Order #');
   });
 });
