@@ -1,7 +1,7 @@
 {
-  "name": "ghl-nuvei-custom-app",
+  "name": "wellness111-dual-payment-system",
   "version": "1.0.0",
-  "description": "GoHighLevel Custom App for NUVEI Payment Gateway",
+  "description": "Dual payment gateway (Nuvei/BaseCommerce for US/Canada, Stripe internationally) with GHL CRM integration for wellness111.com",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
@@ -13,7 +13,9 @@
   "keywords": [
     "ghl",
     "nuvei",
+    "stripe",
     "payment",
+    "wellness111",
     "custom-app"
   ],
   "author": "DIGI5Y",

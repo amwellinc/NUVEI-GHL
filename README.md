@@ -1,6 +1,6 @@
-# GoHighLevel Custom App - NUVEI Payment Gateway
+# Wellness111 Dual Payment System
 
-A Node.js/Express backend custom app for integrating NUVEI payment processing with GoHighLevel.
+A Node.js/Express backend integrating dual payment gateways for wellness111.com — Nuvei/BaseCommerce for US/Canada, Stripe for the rest of the world — with GoHighLevel CRM for contacts, orders, and abandoned-cart tracking.
 
 ## Features
 
