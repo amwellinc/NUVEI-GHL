@@ -36,14 +36,49 @@ jest.mock('axios');
 jest.mock('./ghlOAuthClient');
 const axios = require('axios');
 const { getValidAccessToken } = require('./ghlOAuthClient');
-const { registerProvider } = require('./ghlProviderConfig');
+const { registerProvider, createProviderIntegration } = require('./ghlProviderConfig');
+
+describe('createProviderIntegration', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  test('posts to the provider (base config) endpoint with a bearer token and v3 version header', async () => {
+    axios.post.mockResolvedValueOnce({ data: { _id: 'integration-1', locationId: 'loc-1' } });
+
+    const result = await createProviderIntegration({
+      locationId: 'loc-1',
+      accessToken: 'bearer-token-123',
+      paymentsUrl: 'https://example.com/ghl-provider/checkout',
+      queryUrl: 'https://example.com/ghl-provider/query',
+      imageUrl: 'https://example.com/logo.png',
+      name: 'Wellness111 Dual Payment System',
+      description: 'AMWELL USA payment processing'
+    });
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    const [url, body, options] = axios.post.mock.calls[0];
+    expect(url).toBe('https://services.leadconnectorhq.com/payments/custom-provider/provider?locationId=loc-1');
+    expect(body).toEqual({
+      name: 'Wellness111 Dual Payment System',
+      description: 'AMWELL USA payment processing',
+      paymentsUrl: 'https://example.com/ghl-provider/checkout',
+      queryUrl: 'https://example.com/ghl-provider/query',
+      imageUrl: 'https://example.com/logo.png',
+      supportsSubscriptionSchedule: false
+    });
+    expect(options.headers.Authorization).toBe('Bearer bearer-token-123');
+    expect(options.headers.Version).toBe('v3');
+    expect(result).toEqual({ _id: 'integration-1', locationId: 'loc-1' });
+  });
+});
 
 describe('registerProvider', () => {
   afterEach(() => jest.clearAllMocks());
 
-  test('posts to the connect endpoint with a bearer token and v3 version header', async () => {
+  test('creates the base integration first, then connects with generated live/test keys', async () => {
     getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
-    axios.post.mockResolvedValueOnce({ data: { _id: 'provider-1', locationId: 'loc-1' } });
+    axios.post
+      .mockResolvedValueOnce({ data: { _id: 'integration-1' } }) // create-integration (step 1)
+      .mockResolvedValueOnce({ data: { _id: 'provider-1', locationId: 'loc-1' } }); // connect (step 2)
 
     const result = await registerProvider({
       locationId: 'loc-1',
@@ -54,16 +89,40 @@ describe('registerProvider', () => {
       description: 'AMWELL USA payment processing'
     });
 
-    expect(axios.post).toHaveBeenCalledTimes(1);
-    const [url, body, options] = axios.post.mock.calls[0];
-    expect(url).toBe('https://services.leadconnectorhq.com/payments/custom-provider/connect?locationId=loc-1');
-    expect(body.paymentsUrl).toBe('https://example.com/ghl-provider/checkout');
-    expect(body.queryUrl).toBe('https://example.com/ghl-provider/query');
-    expect(body.live.apiKey).toMatch(/^[0-9a-f]{64}$/);
-    expect(body.test.apiKey).toMatch(/^[0-9a-f]{64}$/);
-    expect(options.headers.Authorization).toBe('Bearer bearer-token-123');
-    expect(options.headers.Version).toBe('v3');
+    expect(axios.post).toHaveBeenCalledTimes(2);
 
-    expect(result).toEqual({ _id: 'provider-1', locationId: 'loc-1' });
+    const [step1Url] = axios.post.mock.calls[0];
+    expect(step1Url).toBe('https://services.leadconnectorhq.com/payments/custom-provider/provider?locationId=loc-1');
+
+    const [step2Url, step2Body, step2Options] = axios.post.mock.calls[1];
+    expect(step2Url).toBe('https://services.leadconnectorhq.com/payments/custom-provider/connect?locationId=loc-1');
+    expect(step2Body.paymentsUrl).toBe('https://example.com/ghl-provider/checkout');
+    expect(step2Body.queryUrl).toBe('https://example.com/ghl-provider/query');
+    expect(step2Body.live.apiKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(step2Body.test.apiKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(step2Options.headers.Authorization).toBe('Bearer bearer-token-123');
+    expect(step2Options.headers.Version).toBe('v3');
+
+    expect(result).toMatchObject({ _id: 'provider-1', locationId: 'loc-1' });
+    expect(result.secrets.live.apiKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.secrets.test.apiKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('does not attempt to connect if creating the base integration fails', async () => {
+    getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
+    axios.post.mockRejectedValueOnce(new Error('GHL 422: Base config already exists'));
+
+    await expect(
+      registerProvider({
+        locationId: 'loc-1',
+        paymentsUrl: 'https://example.com/ghl-provider/checkout',
+        queryUrl: 'https://example.com/ghl-provider/query',
+        imageUrl: 'https://example.com/logo.png',
+        name: 'NUVEI-Payments',
+        description: 'AMWELL USA payment processing'
+      })
+    ).rejects.toThrow('GHL 422: Base config already exists');
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 });
