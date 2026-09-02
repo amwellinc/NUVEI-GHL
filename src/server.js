@@ -26,6 +26,10 @@ app.use('/pay/stripe/webhook', express.raw({ type: 'application/json' }), stripe
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// Serves the payment provider's logo, registered at /static/nuvei-logo.png
+// with GHL — see scripts/register-ghl-provider.js's imageUrl.
+app.use('/static', express.static('public/static'));
+
 // Enhanced request logging middleware with correlation ID
 app.use((req, res, next) => {
   const correlationId = req.headers['x-correlation-id'] || `${Date.now()}-${Math.random()}`;
