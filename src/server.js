@@ -10,6 +10,7 @@ const payRoutes = require('./routes/pay');
 const stripeWebhookRoutes = require('./routes/stripeWebhook');
 const checkoutLinkRoutes = require('./routes/checkoutLink');
 const contactsLookupRoutes = require('./routes/contactsLookup');
+const ghlWebhookRoutes = require('./routes/ghlWebhook');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +50,7 @@ app.use('/ghl-provider', ghlProviderRoutes);
 app.use('/pay/create-link', checkoutLinkRoutes);
 app.use('/pay', payRoutes);
 app.use('/contacts/lookup', contactsLookupRoutes);
+app.use('/webhooks/ghl', ghlWebhookRoutes);
 
 // 404 handler
 app.use((req, res) => {
