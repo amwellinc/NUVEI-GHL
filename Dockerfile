@@ -24,7 +24,16 @@ COPY src ./src
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-USER nodejs
+# su-exec drops from root to the nodejs user in the entrypoint, after that
+# script has fixed ownership of the mounted volume — see docker-entrypoint.sh
+# and src/services/ghlTokenStore.js for why this is needed.
+RUN apk add --no-cache su-exec
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Deliberately no USER directive here — the container starts as root so the
+# entrypoint can chown the volume mount, then immediately drops to nodejs.
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -33,5 +42,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Expose port
 EXPOSE 3000
 
-# Start application
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]
