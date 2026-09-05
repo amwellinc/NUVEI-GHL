@@ -25,7 +25,8 @@ const ENV_KEYS = [
   'NUVEI_SDK_KEY',
   'NUVEI_SDK_USERNAME_TEST',
   'NUVEI_SDK_PASSWORD_TEST',
-  'NUVEI_SDK_KEY_TEST'
+  'NUVEI_SDK_KEY_TEST',
+  'GHL_WHITE_LABEL_DOMAINS'
 ];
 
 let savedEnv;
@@ -36,6 +37,7 @@ beforeEach(() => {
   process.env.GHL_PROVIDER_LIVE_PUBLISHABLE_KEY = LIVE_PUB_KEY;
   process.env.GHL_PROVIDER_TEST_PUBLISHABLE_KEY = TEST_PUB_KEY;
   delete process.env.NUVEI_SANDBOX_MODE;
+  delete process.env.GHL_WHITE_LABEL_DOMAINS;
 
   process.env.NUVEI_SDK_USERNAME = 'live-user';
   process.env.NUVEI_SDK_PASSWORD = 'live-pass';
@@ -110,6 +112,34 @@ describe('GET /ghl-provider/checkout', () => {
     // X-Frame-Options cannot express a multi-origin allowlist and would
     // conflict with frame-ancestors, so it must NOT be set here.
     expect(res.headers['x-frame-options']).toBeUndefined();
+  });
+
+  test('also allows framing from a configured white-label domain (e.g. a custom invoice host)', async () => {
+    process.env.GHL_WHITE_LABEL_DOMAINS = 'us.amwelltechnologies.com';
+    jest.resetModules();
+    verifyApiKey = require('../services/ghlProviderConfig').verifyApiKey;
+    NuveiClient = require('../services/nuveiClient');
+    getTransactionAmount = require('../services/ghlTransactionsClient').getTransactionAmount;
+    getTransactionAmount.mockResolvedValue(25);
+    ghlProviderRoutes = require('./ghlProvider');
+
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toContain(
+      'frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com https://us.amwelltechnologies.com'
+    );
+  });
+
+  test('supports multiple comma-separated white-label domains', async () => {
+    process.env.GHL_WHITE_LABEL_DOMAINS = 'us.amwelltechnologies.com, another-brand.example.com';
+    jest.resetModules();
+    getTransactionAmount = require('../services/ghlTransactionsClient').getTransactionAmount;
+    getTransactionAmount.mockResolvedValue(25);
+    ghlProviderRoutes = require('./ghlProvider');
+
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toContain('https://us.amwelltechnologies.com https://another-brand.example.com');
   });
 
   test('forwards the GHL publishableKey and transactionId to /charge instead of a client-asserted mode', async () => {

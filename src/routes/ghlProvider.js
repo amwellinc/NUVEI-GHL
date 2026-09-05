@@ -8,6 +8,19 @@ const { createRateLimiter, redactErrorDetails, timingSafeEqual } = require('../l
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 
+// GHL pages (funnels, invoices) can be served from an agency's own custom
+// "white label" domain rather than *.gohighlevel.com/*.leadconnectorhq.com —
+// e.g. AMWELL USA's invoices are on us.amwelltechnologies.com. CSP
+// frame-ancestors has no way to allow "any GHL-hosted page" short of a
+// wildcard that would defeat clickjacking protection entirely, so known
+// custom domains must be added explicitly here (comma-separated).
+const WHITE_LABEL_FRAME_ANCESTORS = (process.env.GHL_WHITE_LABEL_DOMAINS || '')
+  .split(',')
+  .map((d) => d.trim())
+  .filter(Boolean)
+  .map((d) => `https://${d}`)
+  .join(' ');
+
 // Phase 1: in-memory charge record so /query can verify what /charge created.
 // Same ephemeral-across-restarts caveat as the OAuth token store (Task 2).
 const charges = new Map();
@@ -73,7 +86,7 @@ router.get('/checkout', (_req, res) => {
   // is unusable here; CSP frame-ancestors allowlists GHL's origins instead.
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com; default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    `frame-ancestors https://*.gohighlevel.com https://*.leadconnectorhq.com${WHITE_LABEL_FRAME_ANCESTORS ? ' ' + WHITE_LABEL_FRAME_ANCESTORS : ''}; default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'`
   );
   res.send(`<!DOCTYPE html>
 <html lang="en">
