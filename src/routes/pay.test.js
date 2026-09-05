@@ -118,9 +118,21 @@ describe('GET /pay', () => {
   test('renders a country selector offering the Nuvei form for US/Canada and a Stripe option for elsewhere', async () => {
     const res = await request(buildApp()).get('/pay' + signedQuery());
     expect(res.status).toBe(200);
-    expect(res.text).toContain('id="region"');
+    expect(res.text).toContain('name="region"');
+    expect(res.text).toContain('value="us_ca"');
+    expect(res.text).toContain('value="intl"');
     expect(res.text).toContain('id="stripeBox"');
     expect(res.text).toContain('/stripe-checkout');
+  });
+
+  test('requires an explicit region choice — neither the card form nor the Stripe option is shown by default', async () => {
+    const res = await request(buildApp()).get('/pay' + signedQuery());
+    expect(res.status).toBe(200);
+    // Both start hidden; only becomes visible via the JS 'change' handler
+    // once the shopper picks one, so neither radio is pre-checked below.
+    expect(res.text).toMatch(/<form id="pf" hidden>/);
+    expect(res.text).toMatch(/<div id="stripeBox" hidden>/);
+    expect(res.text).not.toMatch(/<input type="radio"[^>]*checked/);
   });
 
   test('escapes a description containing HTML rather than reflecting it raw', async () => {
