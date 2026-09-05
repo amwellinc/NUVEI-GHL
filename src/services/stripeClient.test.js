@@ -5,6 +5,8 @@ describe('stripeClient', () => {
   let Stripe;
   let mockSessionsCreate;
   let mockConstructEvent;
+  let mockPaymentIntentsCreate;
+  let mockPaymentIntentsRetrieve;
 
   beforeEach(() => {
     jest.resetModules();
@@ -18,9 +20,12 @@ describe('stripeClient', () => {
     Stripe = require('stripe');
     mockSessionsCreate = jest.fn();
     mockConstructEvent = jest.fn();
+    mockPaymentIntentsCreate = jest.fn();
+    mockPaymentIntentsRetrieve = jest.fn();
     Stripe.mockImplementation(() => ({
       checkout: { sessions: { create: mockSessionsCreate } },
-      webhooks: { constructEvent: mockConstructEvent }
+      webhooks: { constructEvent: mockConstructEvent },
+      paymentIntents: { create: mockPaymentIntentsCreate, retrieve: mockPaymentIntentsRetrieve }
     }));
   });
 
@@ -79,6 +84,69 @@ describe('stripeClient', () => {
         createCheckoutSession({ amount: 10, currency: 'USD', successUrl: 'https://a.com/s', cancelUrl: 'https://a.com/c' })
       ).rejects.toMatchObject({ statusCode: 500, message: 'STRIPE_SECRET_KEY is not configured' });
       expect(mockSessionsCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createPaymentIntent', () => {
+    test('prices in cents and enables automatic payment methods', async () => {
+      const { createPaymentIntent } = require('./stripeClient');
+      mockPaymentIntentsCreate.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret_abc' });
+
+      const result = await createPaymentIntent({
+        amount: '49.99',
+        currency: 'USD',
+        description: 'Order W111-1',
+        metadata: { chargeId: 'charge-1' }
+      });
+
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith({
+        amount: 4999,
+        currency: 'usd',
+        description: 'Order W111-1',
+        metadata: { chargeId: 'charge-1' },
+        automatic_payment_methods: { enabled: true }
+      });
+      expect(result).toEqual({ id: 'pi_1', client_secret: 'pi_1_secret_abc' });
+    });
+
+    test('uses a distinct Stripe client when an explicit secretKey is supplied (GHL test/live mode)', async () => {
+      const { createPaymentIntent } = require('./stripeClient');
+      mockPaymentIntentsCreate.mockResolvedValueOnce({ id: 'pi_test_1' });
+
+      await createPaymentIntent({ amount: 10, currency: 'USD', secretKey: 'sk_test_override' });
+
+      expect(Stripe).toHaveBeenCalledWith('sk_test_override');
+    });
+
+    test('throws a clean error when no secret key is available at all', async () => {
+      delete process.env.STRIPE_SECRET_KEY;
+      const { createPaymentIntent } = require('./stripeClient');
+
+      await expect(createPaymentIntent({ amount: 10, currency: 'USD' })).rejects.toMatchObject({
+        statusCode: 500,
+        message: 'STRIPE_SECRET_KEY is not configured'
+      });
+    });
+  });
+
+  describe('retrievePaymentIntent', () => {
+    test('retrieves by id using the active key by default', async () => {
+      const { retrievePaymentIntent } = require('./stripeClient');
+      mockPaymentIntentsRetrieve.mockResolvedValueOnce({ id: 'pi_1', status: 'succeeded' });
+
+      const result = await retrievePaymentIntent('pi_1');
+
+      expect(mockPaymentIntentsRetrieve).toHaveBeenCalledWith('pi_1');
+      expect(result).toEqual({ id: 'pi_1', status: 'succeeded' });
+    });
+
+    test('uses the explicit secretKey when supplied, matching the key used to create the intent', async () => {
+      const { retrievePaymentIntent } = require('./stripeClient');
+      mockPaymentIntentsRetrieve.mockResolvedValueOnce({ id: 'pi_test_1', status: 'succeeded' });
+
+      await retrievePaymentIntent('pi_test_1', 'sk_test_override');
+
+      expect(Stripe).toHaveBeenCalledWith('sk_test_override');
     });
   });
 

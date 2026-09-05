@@ -1,21 +1,30 @@
 const Stripe = require('stripe');
 
-let stripeInstance = null;
+// Keyed by the actual secret key string (not just "live"/"test") so the GHL
+// Custom Payment Provider flow — which picks STRIPE_SECRET_KEY or
+// STRIPE_SECRET_KEY_TEST per-call based on GHL's own live/test signal, see
+// routes/ghlProvider.js — can get a distinct client per key without either
+// leaking a live/test mismatch into the wrong instance or reconstructing
+// the SDK on every request.
+const stripeInstances = new Map();
 
 /**
  * Lazily constructs the Stripe SDK client — lazy so a missing
  * STRIPE_SECRET_KEY only breaks the Stripe (international) checkout leg,
  * never module load for the whole app (the Nuvei/US-Canada leg must keep
  * working even if Stripe isn't configured yet).
+ * @param {string} [secretKey] - defaults to the active STRIPE_SECRET_KEY;
+ *   pass explicitly to select a specific mode's key (e.g. STRIPE_SECRET_KEY_TEST).
  */
-function getStripe() {
-  if (stripeInstance) return stripeInstance;
-  const key = process.env.STRIPE_SECRET_KEY;
+function getStripe(secretKey) {
+  const key = secretKey || process.env.STRIPE_SECRET_KEY;
   if (!key) {
     throw { statusCode: 500, message: 'STRIPE_SECRET_KEY is not configured' };
   }
-  stripeInstance = new Stripe(key);
-  return stripeInstance;
+  if (!stripeInstances.has(key)) {
+    stripeInstances.set(key, new Stripe(key));
+  }
+  return stripeInstances.get(key);
 }
 
 /**
@@ -47,6 +56,40 @@ async function createCheckoutSession({ amount, currency, description, successUrl
 }
 
 /**
+ * Creates a Stripe PaymentIntent — the embedded-card counterpart to
+ * createCheckoutSession, used where a full-page redirect isn't possible
+ * (the GHL Custom Payment Provider iframe: routes/ghlProvider.js). The
+ * client confirms this directly with Stripe.js using its client_secret, so
+ * raw card data still never reaches this server, matching the PCI-scope
+ * property of the Checkout Session flow despite never leaving the iframe.
+ * @param {{amount: number|string, currency: string, description?: string, metadata?: object, secretKey?: string}} params
+ * @returns {Promise<import('stripe').Stripe.PaymentIntent>}
+ */
+async function createPaymentIntent({ amount, currency, description, metadata, secretKey }) {
+  const stripe = getStripe(secretKey);
+  return stripe.paymentIntents.create({
+    amount: Math.round(Number(amount) * 100),
+    currency: currency.toLowerCase(),
+    description,
+    metadata,
+    automatic_payment_methods: { enabled: true }
+  });
+}
+
+/**
+ * Retrieves a PaymentIntent directly from Stripe — used to independently
+ * verify a client-reported confirmation succeeded (never trusting the
+ * iframe's own success report alone) before recording a charge as paid.
+ * @param {string} paymentIntentId
+ * @param {string} [secretKey]
+ * @returns {Promise<import('stripe').Stripe.PaymentIntent>}
+ */
+async function retrievePaymentIntent(paymentIntentId, secretKey) {
+  const stripe = getStripe(secretKey);
+  return stripe.paymentIntents.retrieve(paymentIntentId);
+}
+
+/**
  * Verifies a webhook request's Stripe-Signature header against the raw
  * request body and returns the parsed event — throws on any mismatch, so a
  * forged webhook (no valid signature) can never trigger a GHL push-back.
@@ -63,4 +106,4 @@ function constructWebhookEvent(rawBody, signature) {
   return stripe.webhooks.constructEvent(rawBody, signature, secret);
 }
 
-module.exports = { createCheckoutSession, constructWebhookEvent };
+module.exports = { createCheckoutSession, createPaymentIntent, retrievePaymentIntent, constructWebhookEvent };

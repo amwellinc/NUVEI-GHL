@@ -5,12 +5,17 @@ const bodyParser = require('body-parser');
 jest.mock('../services/ghlProviderConfig', () => ({ verifyApiKey: jest.fn() }));
 jest.mock('../services/nuveiClient');
 jest.mock('../services/ghlTransactionsClient', () => ({ getTransactionAmount: jest.fn() }));
+jest.mock('../services/stripeClient', () => ({
+  createPaymentIntent: jest.fn(),
+  retrievePaymentIntent: jest.fn()
+}));
 
 // Re-required fresh per test (see beforeEach) so each test gets its own
 // charges Map and its own rate-limiter window instead of sharing module state.
 let verifyApiKey;
 let NuveiClient;
 let getTransactionAmount;
+let stripeClientMock;
 let ghlProviderRoutes;
 
 const LIVE_PUB_KEY = 'live-pub-key';
@@ -26,7 +31,10 @@ const ENV_KEYS = [
   'NUVEI_SDK_USERNAME_TEST',
   'NUVEI_SDK_PASSWORD_TEST',
   'NUVEI_SDK_KEY_TEST',
-  'GHL_WHITE_LABEL_DOMAINS'
+  'GHL_WHITE_LABEL_DOMAINS',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_SECRET_KEY_TEST',
+  'STRIPE_PUBLISHABLE_KEY'
 ];
 
 let savedEnv;
@@ -45,14 +53,20 @@ beforeEach(() => {
   process.env.NUVEI_SDK_USERNAME_TEST = 'test-user';
   process.env.NUVEI_SDK_PASSWORD_TEST = 'test-pass';
   process.env.NUVEI_SDK_KEY_TEST = 'test-key';
+  process.env.STRIPE_SECRET_KEY = 'sk_live_test';
+  process.env.STRIPE_SECRET_KEY_TEST = 'sk_test_test';
+  process.env.STRIPE_PUBLISHABLE_KEY = 'pk_live_test';
 
   jest.resetModules();
   verifyApiKey = require('../services/ghlProviderConfig').verifyApiKey;
   NuveiClient = require('../services/nuveiClient');
   getTransactionAmount = require('../services/ghlTransactionsClient').getTransactionAmount;
+  stripeClientMock = require('../services/stripeClient');
   ghlProviderRoutes = require('./ghlProvider');
   NuveiClient.mockClear();
   getTransactionAmount.mockReset();
+  stripeClientMock.createPaymentIntent.mockReset();
+  stripeClientMock.retrievePaymentIntent.mockReset();
   // Default: GHL's transaction record agrees with whatever amount the test
   // charges — individual tests override this to exercise the
   // mismatch/failure paths.
@@ -149,6 +163,34 @@ describe('GET /ghl-provider/checkout', () => {
     // The old (broken) live/test signal must be gone: GHL's `mode` is
     // "payment", not "live"/"test".
     expect(res.text).not.toContain("paymentProps.mode === 'live'");
+  });
+
+  test('offers a region choice with both the Nuvei and Stripe forms hidden until one is picked', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('name="region"');
+    expect(res.text).toContain('value="us_ca"');
+    expect(res.text).toContain('value="intl"');
+    expect(res.text).toMatch(/<form id="pf" hidden>/);
+    expect(res.text).toMatch(/<form id="sf" hidden>/);
+    expect(res.text).not.toMatch(/<input type="radio"[^>]*checked/);
+  });
+
+  test('loads Stripe.js and embeds the configured publishable key for the international leg', async () => {
+    process.env.STRIPE_PUBLISHABLE_KEY = 'pk_live_abc123';
+    jest.resetModules();
+    ghlProviderRoutes = require('./ghlProvider');
+
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('src="https://js.stripe.com/v3/"');
+    expect(res.text).toContain("Stripe(\"pk_live_abc123\")");
+  });
+
+  test('CSP allows Stripe.js, its hosted card iframe, and its API host', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toContain('script-src \'self\' \'unsafe-inline\' https://js.stripe.com');
+    expect(csp).toContain('frame-src https://js.stripe.com https://hooks.stripe.com');
+    expect(csp).toContain('connect-src \'self\' https://api.stripe.com');
   });
 });
 
@@ -499,5 +541,174 @@ describe('POST /ghl-provider/charge', () => {
     expect(line).toContain('mode=live');
     expect(line).toContain('orderId=ord-9');
     logSpy.mockRestore();
+  });
+});
+
+function stripeIntentPayload(overrides = {}) {
+  return {
+    publishableKey: TEST_PUB_KEY,
+    transactionId: 'ghl-txn-1',
+    orderId: 'order-1',
+    locationId: 'loc-1',
+    amount: 25,
+    currency: 'USD',
+    ...overrides
+  };
+}
+
+describe('POST /ghl-provider/stripe-intent', () => {
+  test('verifies the amount against GHL, creates a PaymentIntent with the mode-appropriate secret key, and returns its client secret', async () => {
+    stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
+
+    const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ publishableKey: TEST_PUB_KEY }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.clientSecret).toBe('pi_1_secret');
+    expect(typeof res.body.chargeId).toBe('string');
+    expect(getTransactionAmount).toHaveBeenCalledWith('loc-1', 'ghl-txn-1');
+    expect(stripeClientMock.createPaymentIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 25, currency: 'USD', secretKey: 'sk_test_test' })
+    );
+  });
+
+  test('uses the live Stripe key when GHL supplies the live publishableKey', async () => {
+    stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
+
+    await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ publishableKey: LIVE_PUB_KEY }));
+
+    expect(stripeClientMock.createPaymentIntent).toHaveBeenCalledWith(expect.objectContaining({ secretKey: 'sk_live_test' }));
+  });
+
+  test('rejects when the amount does not match GHL\'s own transaction record, without calling Stripe', async () => {
+    getTransactionAmount.mockResolvedValueOnce(999);
+
+    const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ amount: 25 }));
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Amount does not match GHL transaction');
+    expect(stripeClientMock.createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  test('returns 502 with a generic message when the GHL transaction lookup itself fails', async () => {
+    getTransactionAmount.mockRejectedValueOnce({ statusCode: 502, message: 'GHL is down' });
+
+    const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload());
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('Unable to verify transaction with GHL');
+  });
+
+  test('rejects missing transactionId, locationId, or an invalid amount before touching GHL or Stripe', async () => {
+    const app = buildApp();
+
+    const noTxn = await request(app).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ transactionId: undefined }));
+    expect(noTxn.status).toBe(400);
+
+    const noLoc = await request(app).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ locationId: undefined }));
+    expect(noLoc.status).toBe(400);
+
+    const badAmount = await request(app).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ amount: 0 }));
+    expect(badAmount.status).toBe(400);
+
+    expect(getTransactionAmount).not.toHaveBeenCalled();
+    expect(stripeClientMock.createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  test('records a pending charge that /query does not yet confirm as successful', async () => {
+    stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
+    verifyApiKey.mockImplementation((key, mode) => mode === 'test' && key === 'gateway-key');
+
+    const intentRes = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload());
+    const queryRes = await request(buildApp())
+      .post('/ghl-provider/query')
+      .send({ type: 'verify', apiKey: 'gateway-key', chargeId: intentRes.body.chargeId, transactionId: 'ghl-txn-1' });
+
+    expect(queryRes.body).toEqual({ success: false });
+  });
+
+  test('propagates a Stripe configuration error as JSON rather than crashing', async () => {
+    stripeClientMock.createPaymentIntent.mockRejectedValueOnce({ statusCode: 500, message: 'STRIPE_SECRET_KEY is not configured' });
+
+    const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload());
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('STRIPE_SECRET_KEY is not configured');
+  });
+});
+
+describe('POST /ghl-provider/stripe-confirm', () => {
+  async function createPendingCharge(app, overrides = {}) {
+    stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
+    const res = await request(app).post('/ghl-provider/stripe-intent').send(stripeIntentPayload(overrides));
+    return res.body.chargeId;
+  }
+
+  test('confirms and marks the charge successful when Stripe independently reports the PaymentIntent as succeeded with the right amount', async () => {
+    const app = buildApp();
+    const chargeId = await createPendingCharge(app);
+    stripeClientMock.retrievePaymentIntent.mockResolvedValueOnce({ id: 'pi_1', status: 'succeeded', amount: 2500 });
+    verifyApiKey.mockImplementation((key, mode) => mode === 'test' && key === 'gateway-key');
+
+    const confirmRes = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_1' });
+    expect(confirmRes.status).toBe(200);
+    expect(confirmRes.body).toEqual({ success: true });
+
+    const queryRes = await request(app)
+      .post('/ghl-provider/query')
+      .send({ type: 'verify', apiKey: 'gateway-key', chargeId, transactionId: 'ghl-txn-1' });
+    expect(queryRes.body).toEqual({ success: true });
+  });
+
+  test('rejects when Stripe reports anything other than succeeded, without marking the charge paid', async () => {
+    const app = buildApp();
+    const chargeId = await createPendingCharge(app);
+    stripeClientMock.retrievePaymentIntent.mockResolvedValueOnce({ id: 'pi_1', status: 'requires_action', amount: 2500 });
+
+    const res = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_1' });
+
+    expect(res.status).toBe(402);
+    expect(res.body.error).toBe('Payment was not completed');
+  });
+
+  test('rejects when the amount Stripe reports does not match the charge (defense in depth)', async () => {
+    const app = buildApp();
+    const chargeId = await createPendingCharge(app, { amount: 25 });
+    stripeClientMock.retrievePaymentIntent.mockResolvedValueOnce({ id: 'pi_1', status: 'succeeded', amount: 100 });
+
+    const res = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_1' });
+
+    expect(res.status).toBe(402);
+  });
+
+  test('returns 404 for an unknown chargeId or a paymentIntentId that does not match the one on record', async () => {
+    const app = buildApp();
+    const chargeId = await createPendingCharge(app);
+
+    const unknownCharge = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId: 'nonexistent', paymentIntentId: 'pi_1' });
+    expect(unknownCharge.status).toBe(404);
+
+    const mismatchedIntent = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_wrong' });
+    expect(mismatchedIntent.status).toBe(404);
+
+    expect(stripeClientMock.retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  test('is idempotent — confirming an already-successful charge again returns success without re-verifying', async () => {
+    const app = buildApp();
+    const chargeId = await createPendingCharge(app);
+    stripeClientMock.retrievePaymentIntent.mockResolvedValueOnce({ id: 'pi_1', status: 'succeeded', amount: 2500 });
+
+    const first = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_1' });
+    expect(first.status).toBe(200);
+
+    const second = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId, paymentIntentId: 'pi_1' });
+    expect(second.status).toBe(200);
+    expect(stripeClientMock.retrievePaymentIntent).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects a request missing chargeId or paymentIntentId', async () => {
+    const app = buildApp();
+    const res = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId: 'x' });
+    expect(res.status).toBe(400);
   });
 });
