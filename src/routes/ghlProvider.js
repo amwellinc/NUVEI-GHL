@@ -208,17 +208,34 @@ router.get('/checkout', (_req, res) => {
     let cardElement = null;
     const nuveiForm = document.getElementById('pf');
     const stripeForm = document.getElementById('sf');
+    const summaryEl = document.getElementById('summary');
 
     window.addEventListener('message', function (event) {
       if (event.source !== window.parent) return;
       const data = event.data || {};
+      // Visible in the browser console (F12 > Console) — the fastest way to
+      // tell "GHL never sent payment_initiate_props" apart from any other
+      // failure if this page ever looks unresponsive again.
+      console.log('[GHL Provider] Received from parent:', data.type || '(no type)');
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
-        document.getElementById('summary').textContent = data.currency + ' ' + data.amount;
+        summaryEl.textContent = data.currency + ' ' + data.amount;
+        summaryEl.style.color = '';
       }
     });
 
     window.parent.postMessage({ type: 'custom_provider_ready', loaded: true }, '*');
+
+    // Without this, a GHL handshake that never arrives (or arrives after an
+    // impatient click) makes the Pay button look frozen — both submit
+    // handlers below silently no-op with zero feedback when paymentProps is
+    // still null. Surface it instead of leaving the page looking dead.
+    setTimeout(function () {
+      if (!paymentProps) {
+        summaryEl.textContent = 'Unable to load payment details. Please refresh this page and try again.';
+        summaryEl.style.color = '#b91c1c';
+      }
+    }, 8000);
 
     document.querySelectorAll('input[name="region"]').forEach(function (input) {
       input.addEventListener('change', function () {
@@ -252,7 +269,10 @@ router.get('/checkout', (_req, res) => {
 
     document.getElementById('pf').addEventListener('submit', async function (e) {
       e.preventDefault();
-      if (!paymentProps) return;
+      if (!paymentProps) {
+        alert('Payment details are still loading. Please wait a moment and try again.');
+        return;
+      }
       document.getElementById('pb').disabled = true;
 
       const nameParts = document.getElementById('cardName').value.trim().split(' ');
@@ -294,7 +314,10 @@ router.get('/checkout', (_req, res) => {
 
     document.getElementById('sf').addEventListener('submit', async function (e) {
       e.preventDefault();
-      if (!paymentProps || !stripe || !cardElement) return;
+      if (!paymentProps || !stripe || !cardElement) {
+        alert('Payment details are still loading. Please wait a moment and try again.');
+        return;
+      }
       document.getElementById('sb').disabled = true;
       document.getElementById('stripe-card-errors').textContent = '';
 

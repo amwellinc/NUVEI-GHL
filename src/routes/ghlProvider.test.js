@@ -212,6 +212,22 @@ describe('GET /ghl-provider/checkout', () => {
     expect(res.text).toContain('Nuvei Secure Payment');
     expect(res.text).toContain('Secure Encrypted Payment');
   });
+
+  test('neither submit handler silently no-ops when GHL has not sent payment_initiate_props yet — both surface a visible message', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    // Regression guard for a reported "Pay button does nothing" freeze: a
+    // bare `if (!paymentProps) return;` gives zero feedback, indistinguishable
+    // from the page being broken. Both handlers must alert instead.
+    expect(res.text).not.toMatch(/if \(!paymentProps\) return;/);
+    expect(res.text).not.toMatch(/if \(!paymentProps \|\| !stripe \|\| !cardElement\) return;/);
+    expect(res.text).toContain("alert('Payment details are still loading. Please wait a moment and try again.')");
+  });
+
+  test('warns visibly if the GHL handshake never arrives at all', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('Unable to load payment details. Please refresh this page and try again.');
+    expect(res.text).toContain('}, 8000);');
+  });
 });
 
 describe('POST /ghl-provider/query', () => {
