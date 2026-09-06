@@ -221,6 +221,25 @@ describe('GET /ghl-provider/checkout', () => {
     expect(nuveiFormText).not.toContain('stripe-badge');
   });
 
+  test('validates an incoming postMessage by origin, not strict window identity', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    // Regression guard: `event.source !== window.parent` silently rejects a
+    // legitimate message if GHL nests an extra iframe layer for this page
+    // (invoices vs. funnel order forms may not share the same structure).
+    expect(res.text).not.toContain('event.source !== window.parent) return');
+    expect(res.text).toContain('isTrustedGHLOrigin');
+    expect(res.text).toContain('gohighlevel|leadconnectorhq');
+  });
+
+  test('includes a configured white-label domain in the trusted postMessage origins, not just the GHL wildcard domains', async () => {
+    process.env.GHL_WHITE_LABEL_DOMAINS = 'us.amwelltechnologies.com';
+    jest.resetModules();
+    ghlProviderRoutes = require('./ghlProvider');
+
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('["https://us.amwelltechnologies.com"]');
+  });
+
   test('neither submit handler silently no-ops when GHL has not sent payment_initiate_props yet — both surface a visible message', async () => {
     const res = await request(buildApp()).get('/ghl-provider/checkout');
     // Regression guard for a reported "Pay button does nothing" freeze: a
@@ -754,5 +773,20 @@ describe('POST /ghl-provider/stripe-confirm', () => {
     const app = buildApp();
     const res = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId: 'x' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /ghl-provider/debug-message', () => {
+  test('logs whatever the client reports and acknowledges — temporary diagnostic, no payment state involved', async () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const res = await request(buildApp())
+      .post('/ghl-provider/debug-message')
+      .send({ origin: 'https://app.gohighlevel.com', fromParent: true, trustedOrigin: true, dataType: 'payment_initiate_props' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ logged: true });
+    const line = logSpy.mock.calls.map((args) => args.join(' ')).find((l) => l.includes('[GHL Provider Debug]'));
+    expect(line).toContain('payment_initiate_props');
+    logSpy.mockRestore();
   });
 });

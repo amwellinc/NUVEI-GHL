@@ -16,12 +16,12 @@ const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 // frame-ancestors has no way to allow "any GHL-hosted page" short of a
 // wildcard that would defeat clickjacking protection entirely, so known
 // custom domains must be added explicitly here (comma-separated).
-const WHITE_LABEL_FRAME_ANCESTORS = (process.env.GHL_WHITE_LABEL_DOMAINS || '')
+const WHITE_LABEL_ORIGINS = (process.env.GHL_WHITE_LABEL_DOMAINS || '')
   .split(',')
   .map((d) => d.trim())
   .filter(Boolean)
-  .map((d) => `https://${d}`)
-  .join(' ');
+  .map((d) => `https://${d}`);
+const WHITE_LABEL_FRAME_ANCESTORS = WHITE_LABEL_ORIGINS.join(' ');
 
 // Phase 1: in-memory charge record so /query can verify what /charge created.
 // Same ephemeral-across-restarts caveat as the OAuth token store (Task 2).
@@ -222,13 +222,38 @@ router.get('/checkout', (req, res) => {
     const stripeForm = document.getElementById('sf');
     const summaryEl = document.getElementById('summary');
 
+    // GHL wildcard domains plus any configured white-label domain(s) — the
+    // same trust boundary this page's own CSP frame-ancestors already uses.
+    // Origin is the correct way to authenticate a postMessage sender (MDN's
+    // own guidance); the previous \`event.source !== window.parent\` check
+    // used strict object identity instead, which silently rejects a
+    // legitimate message if GHL's actual page nests an extra iframe layer
+    // between the top page and this one (invoices and funnel order forms
+    // are not necessarily the same page structure).
+    const whiteLabelOrigins = ${JSON.stringify(WHITE_LABEL_ORIGINS)};
+    function isTrustedGHLOrigin(origin) {
+      if (/^https:\\/\\/([a-z0-9-]+\\.)*(gohighlevel|leadconnectorhq)\\.com$/.test(origin)) return true;
+      return whiteLabelOrigins.indexOf(origin) !== -1;
+    }
+
     window.addEventListener('message', function (event) {
-      if (event.source !== window.parent) return;
       const data = event.data || {};
-      // Visible in the browser console (F12 > Console) — the fastest way to
-      // tell "GHL never sent payment_initiate_props" apart from any other
-      // failure if this page ever looks unresponsive again.
-      console.log('[GHL Provider] Received from parent:', data.type || '(no type)');
+      // Bypasses the trust filter entirely — diagnostic only, to see every
+      // message this page receives regardless of source while the "GHL
+      // never sends payment_initiate_props" investigation is open. Remove
+      // routes/ghlProvider.js's /debug-message route once this is resolved.
+      fetch('/ghl-provider/debug-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          origin: event.origin,
+          fromParent: event.source === window.parent,
+          trustedOrigin: isTrustedGHLOrigin(event.origin),
+          dataType: data.type || '(no type)'
+        })
+      }).catch(function () {});
+
+      if (!isTrustedGHLOrigin(event.origin)) return;
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
         summaryEl.textContent = data.currency + ' ' + data.amount;
@@ -580,6 +605,21 @@ router.post('/stripe-confirm', chargeRateLimiter, async (req, res) => {
     console.error('[GHL Provider Stripe] Confirm failed:', error.message);
     res.status(error.statusCode || 500).json({ error: 'Unable to confirm payment' });
   }
+});
+
+/**
+ * POST /ghl-provider/debug-message
+ * Temporary diagnostic only, for the "payment_initiate_props never
+ * arrives" investigation — the checkout page pings this with details of
+ * every window "message" event it receives (any origin, any source),
+ * bypassing the actual trust filter used for real handling. Lets this be
+ * seen in server logs without needing the customer's own browser DevTools.
+ * Safe to remove once the invoice flow is confirmed working: it doesn't
+ * read or affect any payment state.
+ */
+router.post('/debug-message', (req, res) => {
+  console.log('[GHL Provider Debug] postMessage received:', JSON.stringify(req.body));
+  res.status(200).json({ logged: true });
 });
 
 router.post('/query', (req, res) => {
