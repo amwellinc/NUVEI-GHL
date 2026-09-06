@@ -88,7 +88,7 @@ describe('stripeClient', () => {
   });
 
   describe('createPaymentIntent', () => {
-    test('prices in cents and enables automatic payment methods', async () => {
+    test('prices in cents and restricts to card only (no Link/wallet auto-detection)', async () => {
       const { createPaymentIntent } = require('./stripeClient');
       mockPaymentIntentsCreate.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret_abc' });
 
@@ -104,7 +104,7 @@ describe('stripeClient', () => {
         currency: 'usd',
         description: 'Order W111-1',
         metadata: { chargeId: 'charge-1' },
-        automatic_payment_methods: { enabled: true }
+        payment_method_types: ['card']
       });
       expect(result).toEqual({ id: 'pi_1', client_secret: 'pi_1_secret_abc' });
     });

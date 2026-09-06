@@ -192,6 +192,26 @@ describe('GET /ghl-provider/checkout', () => {
     expect(csp).toContain('frame-src https://js.stripe.com https://hooks.stripe.com');
     expect(csp).toContain('connect-src \'self\' https://api.stripe.com');
   });
+
+  test('renders a boxed, centered card layout rather than stretching full width', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('.card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.10);max-width:440px');
+    expect(res.text).toMatch(/<body>\s*<div class="card">/);
+  });
+
+  test('shows accepted card-brand badges next to the Nuvei card number field', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('class="card-brands"');
+    expect(res.text).toContain('class="brand visa"');
+    expect(res.text).toContain('class="brand amex"');
+    expect(res.text).toContain('class="brand discover"');
+  });
+
+  test('shows gateway-branded trust text under each payment form', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('Nuvei Secure Payment');
+    expect(res.text).toContain('Secure Encrypted Payment');
+  });
 });
 
 describe('POST /ghl-provider/query', () => {

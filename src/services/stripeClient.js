@@ -72,7 +72,14 @@ async function createPaymentIntent({ amount, currency, description, metadata, se
     currency: currency.toLowerCase(),
     description,
     metadata,
-    automatic_payment_methods: { enabled: true }
+    // Explicit 'card' rather than automatic_payment_methods: the client
+    // confirms via stripe.confirmCardPayment() against a manually-mounted
+    // Card Element (routes/ghlProvider.js), not the newer unified Payment
+    // Element — automatic detection surfaces Stripe Link's own "save your
+    // info" popup on top of that element, which read as the page being
+    // stuck (reported live: a confusing overlay where the card form should
+    // be, no visible way forward).
+    payment_method_types: ['card']
   });
 }
 

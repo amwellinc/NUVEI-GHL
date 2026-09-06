@@ -128,20 +128,32 @@ router.get('/checkout', (_req, res) => {
   <title>Secure Payment</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px}
-    label{display:block;font-size:13px;font-weight:600;margin-top:12px}
-    input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.10);max-width:440px;width:100%;padding:28px}
+    label{display:block;font-size:14px;font-weight:600;margin-top:14px;color:#374151}
+    input{width:100%;padding:12px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:16px}
     input::placeholder{color:#aaa}
     .row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
     ${REGION_SELECTOR_STYLES}
-    #stripe-card-element{padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;background:#fff}
+    .card-brands{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+    .brand{display:inline-flex;align-items:center;justify-content:center;height:24px;padding:0 8px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.4px;color:#fff}
+    .brand.visa{background:#1a1f71}
+    .brand.amex{background:#2e77bc}
+    .brand.discover{background:#f68121;color:#1a1a2e}
+    .brand.mc{background:#eee;position:relative;width:38px;padding:0}
+    .mc-dot{width:15px;height:15px;border-radius:50%;position:absolute;top:4.5px}
+    .mc-dot.red{background:#eb001b;left:5px}
+    .mc-dot.yellow{background:#f79e1b;left:14px;mix-blend-mode:multiply}
+    #stripe-card-element{padding:12px;border:1px solid #ccc;border-radius:6px;margin-top:4px;background:#fff}
     #stripe-card-errors{color:#b91c1c;font-size:12px;margin-top:6px;min-height:14px}
-    button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
+    button{width:100%;margin-top:20px;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:17px;font-weight:600;cursor:pointer}
     button:disabled{background:#a78bfa;cursor:default}
+    .secure{text-align:center;margin-top:14px;font-size:13px;color:#6b7280;font-weight:500}
     [hidden]{display:none!important}
   </style>
 </head>
 <body>
+<div class="card">
   <div id="summary"></div>
 
   <label class="region-label">Where are you located?</label>
@@ -159,6 +171,12 @@ router.get('/checkout', (_req, res) => {
   <form id="pf" hidden>
     <label>Cardholder Name</label><input id="cardName" required placeholder="Name on card"/>
     <label>Card Number</label><input id="ccNumber" required inputmode="numeric" maxlength="19" placeholder="1234 5678 9012 3456"/>
+    <div class="card-brands">
+      <span class="brand visa">VISA</span>
+      <span class="brand mc"><span class="mc-dot red"></span><span class="mc-dot yellow"></span></span>
+      <span class="brand amex">AMEX</span>
+      <span class="brand discover">DISC</span>
+    </div>
     <div class="row">
       <div>
         <label>Expiry</label>
@@ -170,6 +188,7 @@ router.get('/checkout', (_req, res) => {
       </div>
     </div>
     <button type="submit" id="pb">Pay</button>
+    <p class="secure">🔒 Nuvei Secure Payment</p>
   </form>
 
   <form id="sf" hidden>
@@ -178,7 +197,9 @@ router.get('/checkout', (_req, res) => {
     <div id="stripe-card-element"></div>
     <div id="stripe-card-errors"></div>
     <button type="submit" id="sb">Pay</button>
+    <p class="secure">🔒 Secure Encrypted Payment</p>
   </form>
+</div>
 
   <script src="https://js.stripe.com/v3/"></script>
   <script>
