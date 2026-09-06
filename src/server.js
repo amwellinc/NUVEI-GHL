@@ -11,7 +11,6 @@ const stripeWebhookRoutes = require('./routes/stripeWebhook');
 const checkoutLinkRoutes = require('./routes/checkoutLink');
 const contactsLookupRoutes = require('./routes/contactsLookup');
 const ghlWebhookRoutes = require('./routes/ghlWebhook');
-const adminInspectProviderRoutes = require('./routes/adminInspectProvider'); // TEMPORARY — remove after diagnosis
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,7 +55,6 @@ app.use('/pay/create-link', checkoutLinkRoutes);
 app.use('/pay', payRoutes);
 app.use('/contacts/lookup', contactsLookupRoutes);
 app.use('/webhooks/ghl', ghlWebhookRoutes);
-app.use('/admin/inspect-provider', adminInspectProviderRoutes); // TEMPORARY
 
 // 404 handler
 app.use((req, res) => {
