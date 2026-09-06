@@ -253,7 +253,30 @@ describe('GET /ghl-provider/checkout', () => {
   test('warns visibly if the GHL handshake never arrives at all', async () => {
     const res = await request(buildApp()).get('/ghl-provider/checkout');
     expect(res.text).toContain('Unable to load payment details. Please refresh this page and try again.');
-    expect(res.text).toContain('}, 8000);');
+    expect(res.text).toContain('}, 30000);');
+  });
+
+  test('retries the custom_provider_ready handshake on an interval instead of firing once', async () => {
+    // GHL's own parent frame can attach its postMessage listener after a
+    // one-shot ready event already fired and was missed — see
+    // GoHighLevel/highlevel-api-docs issue #308. Retrying until
+    // payment_initiate_props actually arrives is the confirmed fix.
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('setInterval(function () {');
+    expect(res.text).toContain("JSON.stringify({ type: 'custom_provider_ready', loaded: true })");
+    expect(res.text).toContain('clearInterval(readyInterval)');
+  });
+
+  test('sends the ready handshake to window.top as well as window.parent, in case GHL nests an extra iframe layer', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('window.top !== window.parent');
+    expect(res.text).toContain('window.top.postMessage(readyMessage');
+  });
+
+  test('parses a stringified postMessage payload, not just raw objects, when checking for payment_initiate_props', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain("typeof data === 'string'");
+    expect(res.text).toContain('JSON.parse(data)');
   });
 });
 

@@ -237,7 +237,14 @@ router.get('/checkout', (req, res) => {
     }
 
     window.addEventListener('message', function (event) {
-      const data = event.data || {};
+      // GHL (and this page's own retry loop, above) sends postMessage
+      // payloads as JSON strings, not raw objects — parse defensively so a
+      // stringified payment_initiate_props isn't missed just because
+      // data.type is undefined on the un-parsed string.
+      let data = event.data || {};
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { data = {}; }
+      }
       const trusted = isTrustedGHLOrigin(event.origin);
       // Diagnostic only, for the "message arrives but data.type doesn't
       // match payment_initiate_props" investigation — only pings for
@@ -265,18 +272,46 @@ router.get('/checkout', (req, res) => {
       }
     });
 
-    window.parent.postMessage({ type: 'custom_provider_ready', loaded: true }, '*');
+    // GHL's own parent frame can finish loading and attach its postMessage
+    // listener AFTER this iframe's one-shot "ready" event already fired and
+    // was missed — a confirmed race condition in GHL's checkout frontend
+    // (see GoHighLevel/highlevel-api-docs issue #308: a single ready-fire
+    // left payment_initiate_props never dispatched at all; retrying the
+    // handshake on an interval until GHL actually responds resolved it).
+    // Sent as a JSON string (not a raw object) and to both window.parent and
+    // window.top, matching the confirmed-working payload shape from that
+    // report — window.top matters when GHL nests an extra iframe layer
+    // between the real top-level page and this one.
+    const readyMessage = JSON.stringify({ type: 'custom_provider_ready', loaded: true });
+    const readyInterval = setInterval(function () {
+      if (paymentProps) {
+        clearInterval(readyInterval);
+        return;
+      }
+      window.parent.postMessage(readyMessage, '*');
+      if (window.top !== window.parent) {
+        window.top.postMessage(readyMessage, '*');
+      }
+    }, 500);
+    // Fires immediately too, so a GHL frame that's already listening doesn't
+    // wait a full 500ms for the first attempt.
+    window.parent.postMessage(readyMessage, '*');
+    if (window.top !== window.parent) {
+      window.top.postMessage(readyMessage, '*');
+    }
 
     // Without this, a GHL handshake that never arrives (or arrives after an
     // impatient click) makes the Pay button look frozen — both submit
     // handlers below silently no-op with zero feedback when paymentProps is
-    // still null. Surface it instead of leaving the page looking dead.
+    // still null. Surface it instead of leaving the page looking dead. Also
+    // stops the retry loop above so it doesn't keep firing forever.
     setTimeout(function () {
+      clearInterval(readyInterval);
       if (!paymentProps) {
         summaryEl.textContent = 'Unable to load payment details. Please refresh this page and try again.';
         summaryEl.style.color = '#b91c1c';
       }
-    }, 8000);
+    }, 30000);
 
     document.querySelectorAll('input[name="region"]').forEach(function (input) {
       input.addEventListener('change', function () {
