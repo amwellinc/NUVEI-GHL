@@ -238,22 +238,26 @@ router.get('/checkout', (req, res) => {
 
     window.addEventListener('message', function (event) {
       const data = event.data || {};
-      // Bypasses the trust filter entirely — diagnostic only, to see every
-      // message this page receives regardless of source while the "GHL
-      // never sends payment_initiate_props" investigation is open. Remove
+      const trusted = isTrustedGHLOrigin(event.origin);
+      // Diagnostic only, for the "message arrives but data.type doesn't
+      // match payment_initiate_props" investigation — only pings for
+      // trusted-origin messages (Stripe.js's own internal iframe chatter is
+      // frequent, irrelevant noise here and would otherwise dominate the
+      // logs). Sends the full raw payload, not just its type, since GHL's
+      // invoice flow may shape this differently than the funnel order-form
+      // flow the original implementation was built against. Remove
       // routes/ghlProvider.js's /debug-message route once this is resolved.
-      fetch('/ghl-provider/debug-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          origin: event.origin,
-          fromParent: event.source === window.parent,
-          trustedOrigin: isTrustedGHLOrigin(event.origin),
-          dataType: data.type || '(no type)'
-        })
-      }).catch(function () {});
+      if (trusted) {
+        let rawData;
+        try { rawData = JSON.stringify(data); } catch (e) { rawData = String(data); }
+        fetch('/ghl-provider/debug-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ origin: event.origin, fromParent: event.source === window.parent, rawData: rawData })
+        }).catch(function () {});
+      }
 
-      if (!isTrustedGHLOrigin(event.origin)) return;
+      if (!trusted) return;
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
         summaryEl.textContent = data.currency + ' ' + data.amount;
