@@ -210,7 +210,15 @@ describe('GET /ghl-provider/checkout', () => {
   test('shows gateway-branded trust text under each payment form', async () => {
     const res = await request(buildApp()).get('/ghl-provider/checkout');
     expect(res.text).toContain('Nuvei Secure Payment');
-    expect(res.text).toContain('Secure Encrypted Payment');
+    expect(res.text).toContain('Stripe secured payment');
+  });
+
+  test('shows a Stripe wordmark badge only on the Stripe panel, not the Nuvei one', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    const stripeFormStart = res.text.indexOf('<form id="sf"');
+    const nuveiFormText = res.text.slice(res.text.indexOf('<form id="pf"'), stripeFormStart);
+    expect(res.text).toContain('class="stripe-badge"');
+    expect(nuveiFormText).not.toContain('stripe-badge');
   });
 
   test('neither submit handler silently no-ops when GHL has not sent payment_initiate_props yet — both surface a visible message', async () => {

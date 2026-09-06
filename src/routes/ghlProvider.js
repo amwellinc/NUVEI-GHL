@@ -108,7 +108,16 @@ async function assertAmountMatchesGHL(locationId, transactionId, numericAmount) 
   }
 }
 
-router.get('/checkout', (_req, res) => {
+router.get('/checkout', (req, res) => {
+  // Diagnostic only, for the "GHL never sends payment_initiate_props"
+  // investigation — logs whatever GHL actually attaches to the iframe
+  // request itself (query string, Referer), in case transaction data is
+  // passed here rather than (or in addition to) the documented postMessage
+  // handshake for this specific (invoice) context.
+  console.log(
+    `[GHL Provider Checkout] query=${JSON.stringify(req.query)} referer=${req.headers.referer || 'n/a'}`
+  );
+
   // GHL legitimately iframes this page, so X-Frame-Options (single-origin only)
   // is unusable here; CSP frame-ancestors allowlists GHL's origins instead.
   // script-src/frame-src/connect-src additionally allow Stripe.js and its own
@@ -144,6 +153,8 @@ router.get('/checkout', (_req, res) => {
     .mc-dot{width:15px;height:15px;border-radius:50%;position:absolute;top:4.5px}
     .mc-dot.red{background:#eb001b;left:5px}
     .mc-dot.yellow{background:#f79e1b;left:14px;mix-blend-mode:multiply}
+    .stripe-brand{display:flex;justify-content:center;margin-top:10px}
+    .stripe-badge{display:inline-flex;align-items:center;padding:5px 12px;border-radius:5px;background:#635bff;color:#fff;font-size:14px;font-weight:700;font-style:italic;letter-spacing:-0.02em}
     #stripe-card-element{padding:12px;border:1px solid #ccc;border-radius:6px;margin-top:4px;background:#fff}
     #stripe-card-errors{color:#b91c1c;font-size:12px;margin-top:6px;min-height:14px}
     button{width:100%;margin-top:20px;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:17px;font-weight:600;cursor:pointer}
@@ -192,12 +203,13 @@ router.get('/checkout', (_req, res) => {
   </form>
 
   <form id="sf" hidden>
+    <div class="stripe-brand"><span class="stripe-badge">stripe</span></div>
     <label>Cardholder Name</label><input id="stripeCardName" required placeholder="Name on card"/>
     <label>Card</label>
     <div id="stripe-card-element"></div>
     <div id="stripe-card-errors"></div>
     <button type="submit" id="sb">Pay</button>
-    <p class="secure">🔒 Secure Encrypted Payment</p>
+    <p class="secure">🔒 Stripe secured payment</p>
   </form>
 </div>
 
