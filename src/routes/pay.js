@@ -210,11 +210,11 @@ router.get('/', pageRateLimiter, (req, res) => {
           ccCvv: document.getElementById('ccCvv').value
         })
       });
-      if (res.redirected) {
-        window.location.href = res.url;
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.redirectUrl) {
+        window.location.href = body.redirectUrl;
         return;
       }
-      const body = await res.json().catch(() => ({}));
       alert(body.error || 'Payment failed. Please check your details and try again.');
       document.getElementById('pb').disabled = false;
     } catch (err) {
@@ -286,14 +286,19 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
       ? session.successUrl
       : `${returnBaseUrl(req)}/pay/return?status=success`;
     const successUrl = successBase.includes('?') ? `${successBase}&transactionId=${result.transactionId}` : `${successBase}?transactionId=${result.transactionId}`;
-    return res.redirect(successUrl);
+    // Returned as JSON (not res.redirect) so the browser navigates via
+    // window.location — fetch() would otherwise try to follow this redirect
+    // itself, which fails whenever the target is a cross-origin page (e.g.
+    // wellness111.com) without CORS headers, masking a successful charge as
+    // a network error.
+    return res.status(200).json({ redirectUrl: successUrl });
   } catch (error) {
     console.error('[Pay Link] Charge failed:', error.message, redactErrorDetails(error.details));
 
     const failureBase = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
       ? session.failureUrl
       : `${returnBaseUrl(req)}/pay/return?status=cancelled`;
-    return res.redirect(failureBase);
+    return res.status(200).json({ redirectUrl: failureBase });
   }
 });
 

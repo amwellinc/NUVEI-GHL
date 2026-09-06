@@ -178,7 +178,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '25.00', currency: 'USD' }));
   });
 
@@ -192,7 +192,7 @@ describe('POST /pay/:sessionId/charge', () => {
       amount: 0.01 // attacker-supplied — must be ignored entirely
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '25.00' }));
   });
 
@@ -217,8 +217,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://amwellinc.com/thanks?transactionId=txn-redirect');
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe('https://amwellinc.com/thanks?transactionId=txn-redirect');
   });
 
   test('does not redirect to a successUrl outside the allowed origins, falls back to the built-in confirmation page', async () => {
@@ -230,8 +230,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=success&transactionId=txn-nofollow');
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=success&transactionId=txn-nofollow');
   });
 
   test('a session cannot be charged twice — a successful charge consumes it', async () => {
@@ -241,7 +241,7 @@ describe('POST /pay/:sessionId/charge', () => {
     const payload = { email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
 
     const first = await request(app).post(`/pay/${sessionId}/charge`).send(payload);
-    expect(first.status).toBe(302);
+    expect(first.status).toBe(200);
     expect(createPayment).toHaveBeenCalledTimes(1);
 
     const second = await request(app).post(`/pay/${sessionId}/charge`).send({ ...payload, ccNumber: '5555555555554444' });
@@ -257,8 +257,8 @@ describe('POST /pay/:sessionId/charge', () => {
     const payload = { email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
 
     const first = await request(app).post(`/pay/${sessionId}/charge`).send(payload);
-    expect(first.status).toBe(302);
-    expect(first.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
+    expect(first.status).toBe(200);
+    expect(first.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
 
     const second = await request(app).post(`/pay/${sessionId}/charge`).send({ ...payload, ccNumber: '5555555555554444' });
     expect(second.status).toBe(404);
@@ -286,8 +286,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://amwellinc.com/failed');
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe('https://amwellinc.com/failed');
   });
 
   test('a decline falls back to the built-in confirmation page when no allowed failureUrl is configured', async () => {
@@ -300,8 +300,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
   });
 
   test('a successful charge with a contactId on the link records a note, custom field, and tag on that GHL contact', async () => {
@@ -313,7 +313,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(ghlMocks.createNote).toHaveBeenCalledWith('contact-123', expect.objectContaining({ body: expect.stringContaining('txn-ghl') }));
     expect(ghlMocks.setCustomField).toHaveBeenCalledWith('contact-123', 'nuvei_transaction_id', 'txn-ghl');
     expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-123', ['payment-completed']);
@@ -329,7 +329,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(ghlMocks.upsertContact).toHaveBeenCalledWith({ email: 'a@b.com', firstName: 'Ada', lastName: 'Lovelace' });
     expect(ghlMocks.createNote).toHaveBeenCalledWith('resolved-contact', expect.objectContaining({ body: expect.stringContaining('txn-no-contact') }));
   });
@@ -344,7 +344,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(ghlMocks.createNote).not.toHaveBeenCalled();
     expect(ghlMocks.setCustomField).not.toHaveBeenCalled();
     expect(ghlMocks.addTags).not.toHaveBeenCalled();
@@ -361,8 +361,8 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
-    expect(res.headers.location).toContain('transactionId=txn-ghl-fail');
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toContain('transactionId=txn-ghl-fail');
     // The independently-failing note creation must not have blocked the
     // other two GHL side effects from still being attempted.
     expect(ghlMocks.setCustomField).toHaveBeenCalled();
@@ -378,7 +378,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(ghlMocks.createOpportunity).toHaveBeenCalledWith({
       pipelineId: 'orders-pipeline-1',
       pipelineStageId: 'orders-stage-new',
@@ -406,7 +406,7 @@ describe('POST /pay/:sessionId/charge', () => {
       email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
     });
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
     expect(ghlMocks.createOpportunity).not.toHaveBeenCalled();
   });
 });
