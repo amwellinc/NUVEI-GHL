@@ -276,6 +276,55 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(createPayment).not.toHaveBeenCalled();
   });
 
+  describe('field format validation — rejected before the gateway is ever called', () => {
+    const basePayload = { email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
+
+    test.each([
+      ['a malformed email', { email: 'not-an-email' }, /email/i],
+      ['a non-numeric card number', { ccNumber: '4111-1111-1111-1111' }, /card number/i],
+      ['a too-short card number', { ccNumber: '12345' }, /card number/i],
+      ['a card number sent as a non-string (object)', { ccNumber: { toString: () => '4111111111111111' } }, /card number/i],
+      ['an out-of-range expiry month', { ccExpMonth: '13' }, /expiry month/i],
+      ['a non-4-digit expiry year', { ccExpYear: '27' }, /expiry year/i],
+      ['a non-numeric CVV', { ccCvv: 'abc' }, /verification code/i],
+      ['a too-long CVV', { ccCvv: '12345' }, /verification code/i]
+    ])('rejects %s with a 400 and never calls the gateway', async (_label, overrides, messagePattern) => {
+      const app = buildApp();
+      const createPayment = mockSuccessfulSale();
+      const sessionId = await createSession(app);
+
+      const res = await request(app).post(`/pay/${sessionId}/charge`).send({ ...basePayload, ...overrides });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(messagePattern);
+      expect(createPayment).not.toHaveBeenCalled();
+    });
+
+    test('a validation failure does not consume the session — the shopper can correct a typo and resubmit', async () => {
+      const app = buildApp();
+      const createPayment = mockSuccessfulSale('txn-retry');
+      const sessionId = await createSession(app);
+
+      const bad = await request(app).post(`/pay/${sessionId}/charge`).send({ ...basePayload, ccCvv: 'abc' });
+      expect(bad.status).toBe(400);
+
+      const good = await request(app).post(`/pay/${sessionId}/charge`).send(basePayload);
+      expect(good.status).toBe(200);
+      expect(createPayment).toHaveBeenCalledTimes(1);
+    });
+
+    test('accepts well-formed fields (control case for the table above)', async () => {
+      const app = buildApp();
+      const createPayment = mockSuccessfulSale('txn-valid');
+      const sessionId = await createSession(app);
+
+      const res = await request(app).post(`/pay/${sessionId}/charge`).send(basePayload);
+
+      expect(res.status).toBe(200);
+      expect(createPayment).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test('a decline redirects to failureUrl when allowed', async () => {
     const app = buildApp();
     const createPayment = jest.fn().mockRejectedValue({ statusCode: 402, message: 'No such Issuer' });

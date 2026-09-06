@@ -10,6 +10,28 @@ const { createOrderOpportunity, createAbandonedCartOpportunity } = require('../l
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
 
+// Format-only checks on the card fields — not a substitute for the gateway's
+// own validation, but rejecting an obviously-malformed submission here means
+// it never gets encrypted and sent to BaseCommerce at all: one less way to
+// spend a charge attempt (and its slice of the rate limiter budget) on
+// garbage rather than an actual card-testing attempt, and one less place a
+// non-string value (object/array — the JSON body has no type enforcement of
+// its own) could reach the 3DES payload builder in services/nuveiClient.js.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CARD_NUMBER_PATTERN = /^\d{12,19}$/;
+const EXP_MONTH_PATTERN = /^(0?[1-9]|1[0-2])$/;
+const EXP_YEAR_PATTERN = /^\d{4}$/;
+const CVV_PATTERN = /^\d{3,4}$/;
+
+function validateChargeFields({ email, ccNumber, ccExpMonth, ccExpYear, ccCvv }) {
+  if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) return 'Invalid email address';
+  if (typeof ccNumber !== 'string' || !CARD_NUMBER_PATTERN.test(ccNumber)) return 'Invalid card number';
+  if (typeof ccExpMonth !== 'string' || !EXP_MONTH_PATTERN.test(ccExpMonth)) return 'Invalid card expiry month';
+  if (typeof ccExpYear !== 'string' || !EXP_YEAR_PATTERN.test(ccExpYear)) return 'Invalid card expiry year';
+  if (typeof ccCvv !== 'string' || !CVV_PATTERN.test(ccCvv)) return 'Invalid card verification code';
+  return null;
+}
+
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 // Looser than the charge limiter, but GET /pay creates a session on every
 // hit (see below), so it needs its own bound too — a static, publicly
@@ -238,9 +260,14 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     return res.status(404).json({ error: 'Payment session not found or expired' });
   }
 
-  const { firstName, lastName, email, ccNumber, ccExpMonth, ccExpYear, ccCvv } = req.body;
+  const { firstName, lastName, email, ccNumber, ccExpMonth, ccExpYear, ccCvv } = req.body || {};
   if (!email || !ccNumber || !ccExpMonth || !ccExpYear || !ccCvv) {
     return res.status(400).json({ error: 'Missing required payment fields' });
+  }
+
+  const validationError = validateChargeFields({ email, ccNumber, ccExpMonth, ccExpYear, ccCvv });
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
   }
 
   // Consume the session before attempting the charge, win or lose — a
