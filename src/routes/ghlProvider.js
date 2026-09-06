@@ -6,6 +6,7 @@ const { verifyApiKey } = require('../services/ghlProviderConfig');
 const { getTransactionAmount } = require('../services/ghlTransactionsClient');
 const { createPaymentIntent, retrievePaymentIntent } = require('../services/stripeClient');
 const { createRateLimiter, redactErrorDetails, timingSafeEqual } = require('../lib/security');
+const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 
@@ -132,10 +133,7 @@ router.get('/checkout', (_req, res) => {
     input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px}
     input::placeholder{color:#aaa}
     .row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
-    .region-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
-    .region-option{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;color:#374151}
-    .region-option:has(input:checked){border-color:#7c3aed;background:#f8f7ff;color:#1a1a2e}
-    .region-option input{width:auto;margin:0}
+    ${REGION_SELECTOR_STYLES}
     #stripe-card-element{padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;background:#fff}
     #stripe-card-errors{color:#b91c1c;font-size:12px;margin-top:6px;min-height:14px}
     button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
@@ -146,7 +144,7 @@ router.get('/checkout', (_req, res) => {
 <body>
   <div id="summary"></div>
 
-  <label>Where are you located?</label>
+  <label class="region-label">Where are you located?</label>
   <div class="region-row">
     <label class="region-option">
       <input type="radio" name="region" value="us_ca"/>

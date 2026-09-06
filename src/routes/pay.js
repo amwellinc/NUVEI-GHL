@@ -8,6 +8,7 @@ const { notifyGHL } = require('../lib/ghlNotify');
 const { resolveContactId } = require('../lib/ghlContact');
 const { createOrderOpportunity, createAbandonedCartOpportunity } = require('../lib/ghlOrders');
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
+const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
 
 const chargeRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20 });
 // Looser than the charge limiter, but GET /pay creates a session on every
@@ -106,10 +107,7 @@ router.get('/', pageRateLimiter, (req, res) => {
     input{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;margin-top:4px;font-size:15px}
     input::placeholder{color:#aaa}
     .row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
-    .region-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
-    .region-option{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;color:#374151}
-    .region-option:has(input:checked){border-color:#7c3aed;background:#f8f7ff;color:#1a1a2e}
-    .region-option input{width:auto;margin:0}
+    ${REGION_SELECTOR_STYLES}
     button{width:100%;margin-top:20px;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
     button:disabled{background:#a78bfa;cursor:default}
     .secure{text-align:center;margin-top:14px;font-size:12px;color:#9ca3af}
@@ -124,7 +122,7 @@ router.get('/', pageRateLimiter, (req, res) => {
     ${description ? `<div class="desc">${escapeHtml(description)}</div>` : ''}
   </div>
 
-  <label>Where are you located?</label>
+  <label class="region-label">Where are you located?</label>
   <div class="region-row">
     <label class="region-option">
       <input type="radio" name="region" value="us_ca"/>
