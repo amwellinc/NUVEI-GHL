@@ -275,14 +275,26 @@ describe('GET /ghl-provider/checkout', () => {
     // payment_initiate_props actually arrives is the confirmed fix.
     const res = await request(buildApp()).get('/ghl-provider/checkout');
     expect(res.text).toContain('setInterval(function () {');
-    expect(res.text).toContain("JSON.stringify({ type: 'custom_provider_ready', loaded: true })");
+    expect(res.text).toContain("sendToGHL({ type: 'custom_provider_ready', loaded: true })");
     expect(res.text).toContain('clearInterval(readyInterval)');
   });
 
-  test('sends the ready handshake to window.top as well as window.parent, in case GHL nests an extra iframe layer', async () => {
+  test('sends every outbound message (ready handshake and success/error reports) as a JSON string, to both window.parent and window.top', async () => {
+    // GHL's listener expects a JSON string, not a raw object — a raw object
+    // silently fails to parse on GHL's side, which is indistinguishable from
+    // the message never having arrived at all. This regressed once already
+    // for custom_element_success_response after a real, successful charge
+    // never triggered GHL's own queryUrl call.
     const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('function sendToGHL(message) {');
+    expect(res.text).toContain('const json = JSON.stringify(message)');
+    expect(res.text).toContain("window.parent.postMessage(json, '*')");
     expect(res.text).toContain('window.top !== window.parent');
-    expect(res.text).toContain('window.top.postMessage(readyMessage');
+    expect(res.text).toContain("window.top.postMessage(json, '*')");
+    // Every success/error report must be routed through sendToGHL, not a
+    // raw, un-stringified window.parent.postMessage call.
+    expect(res.text).toContain("sendToGHL({ type: 'custom_element_success_response'");
+    expect(res.text).not.toMatch(/window\.parent\.postMessage\(\{ type: 'custom_element/);
   });
 
   test('parses a stringified postMessage payload, not just raw objects, when checking for payment_initiate_props', async () => {

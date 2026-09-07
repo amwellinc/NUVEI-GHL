@@ -246,33 +246,40 @@ router.get('/checkout', (req, res) => {
       }
     });
 
+    // Every outbound message this page sends — the ready handshake and the
+    // final success/error report alike — goes through here: GHL's own
+    // listener expects a JSON string, not a raw object (confirmed working
+    // shape from GoHighLevel/highlevel-api-docs issue #308), and is sent to
+    // both window.parent and window.top since GHL may nest an extra iframe
+    // layer for a given surface. The success/error report was previously
+    // sent as a raw, un-stringified object — the likely reason GHL never
+    // called this app's queryUrl after a real, successful charge: a
+    // silently-dropped, unparseable message looks identical to one that
+    // never arrived at all.
+    function sendToGHL(message) {
+      const json = JSON.stringify(message);
+      window.parent.postMessage(json, '*');
+      if (window.top !== window.parent) {
+        window.top.postMessage(json, '*');
+      }
+    }
+
     // GHL's own parent frame can finish loading and attach its postMessage
     // listener AFTER this iframe's one-shot "ready" event already fired and
     // was missed — a confirmed race condition in GHL's checkout frontend
-    // (see GoHighLevel/highlevel-api-docs issue #308: a single ready-fire
-    // left payment_initiate_props never dispatched at all; retrying the
-    // handshake on an interval until GHL actually responds resolved it).
-    // Sent as a JSON string (not a raw object) and to both window.parent and
-    // window.top, matching the confirmed-working payload shape from that
-    // report — window.top matters when GHL nests an extra iframe layer
-    // between the real top-level page and this one.
-    const readyMessage = JSON.stringify({ type: 'custom_provider_ready', loaded: true });
+    // (see issue #308 above): a single ready-fire left payment_initiate_props
+    // never dispatched at all; retrying the handshake on an interval until
+    // GHL actually responds resolved it.
     const readyInterval = setInterval(function () {
       if (paymentProps) {
         clearInterval(readyInterval);
         return;
       }
-      window.parent.postMessage(readyMessage, '*');
-      if (window.top !== window.parent) {
-        window.top.postMessage(readyMessage, '*');
-      }
+      sendToGHL({ type: 'custom_provider_ready', loaded: true });
     }, 500);
     // Fires immediately too, so a GHL frame that's already listening doesn't
     // wait a full 500ms for the first attempt.
-    window.parent.postMessage(readyMessage, '*');
-    if (window.top !== window.parent) {
-      window.top.postMessage(readyMessage, '*');
-    }
+    sendToGHL({ type: 'custom_provider_ready', loaded: true });
 
     // Without this, a GHL handshake that never arrives (or arrives after an
     // impatient click) makes the Pay button look frozen — both submit
@@ -352,15 +359,15 @@ router.get('/checkout', (req, res) => {
         });
         const body = await res.json();
         if (res.ok) {
-          window.parent.postMessage({ type: 'custom_element_success_response', chargeId: body.chargeId }, '*');
+          sendToGHL({ type: 'custom_element_success_response', chargeId: body.chargeId });
         } else {
           document.getElementById('nuvei-card-errors').textContent = body.error || 'Payment failed';
-          window.parent.postMessage({ type: 'custom_element_error_response', error: { description: body.error || 'Payment failed' } }, '*');
+          sendToGHL({ type: 'custom_element_error_response', error: { description: body.error || 'Payment failed' } });
           document.getElementById('pb').disabled = false;
         }
       } catch (err) {
         document.getElementById('nuvei-card-errors').textContent = 'Network error. Please try again.';
-        window.parent.postMessage({ type: 'custom_element_error_response', error: { description: 'Network error' } }, '*');
+        sendToGHL({ type: 'custom_element_error_response', error: { description: 'Network error' } });
         document.getElementById('pb').disabled = false;
       }
     });
@@ -420,10 +427,10 @@ router.get('/checkout', (req, res) => {
           throw new Error(confirmBody.error || 'Payment could not be confirmed');
         }
 
-        window.parent.postMessage({ type: 'custom_element_success_response', chargeId: intentBody.chargeId }, '*');
+        sendToGHL({ type: 'custom_element_success_response', chargeId: intentBody.chargeId });
       } catch (err) {
         document.getElementById('stripe-card-errors').textContent = err.message || 'Payment failed';
-        window.parent.postMessage({ type: 'custom_element_error_response', error: { description: err.message || 'Payment failed' } }, '*');
+        sendToGHL({ type: 'custom_element_error_response', error: { description: err.message || 'Payment failed' } });
         document.getElementById('sb').disabled = false;
       }
     });
