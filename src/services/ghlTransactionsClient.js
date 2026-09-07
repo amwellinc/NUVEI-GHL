@@ -26,17 +26,27 @@ async function getTransactionAmount(locationId, transactionId) {
       timeout: 15000
     });
   } catch (error) {
-    console.error(`GHL transaction lookup failed: ${error.message}`);
+    console.error(`Transaction lookup failed: ${error.message}`);
     throw {
       statusCode: 502,
-      message: 'Failed to verify transaction with GHL',
+      message: 'Failed to verify this transaction',
       details: error.response?.data
     };
   }
 
-  const amount = Number(response.data?.amount);
+  // Despite the documented shape being a bare object, this endpoint has been
+  // observed live returning the transaction wrapped in a single-element
+  // array instead (confirmed against a real pending invoice payment — the
+  // record itself, including `amount`, is fully populated even pre-payment,
+  // contrary to an earlier assumption). Handle both shapes defensively, and
+  // prefer the element whose _id actually matches the transactionId we
+  // asked for over blindly trusting array position.
+  const candidates = Array.isArray(response.data) ? response.data : [response.data];
+  const record = candidates.find((c) => c && c._id === transactionId) || candidates[0];
+
+  const amount = Number(record?.amount);
   if (!Number.isFinite(amount)) {
-    throw { statusCode: 502, message: 'GHL transaction response missing a valid amount' };
+    throw { statusCode: 502, message: 'Transaction response missing a valid amount' };
   }
   return amount;
 }

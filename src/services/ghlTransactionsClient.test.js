@@ -8,9 +8,9 @@ const { getTransactionAmount } = require('./ghlTransactionsClient');
 describe('getTransactionAmount', () => {
   afterEach(() => jest.clearAllMocks());
 
-  test('fetches the transaction with a bearer token and v3 version header, returns the amount', async () => {
+  test('fetches the transaction with a bearer token and v3 version header, returns the amount (bare-object response shape)', async () => {
     getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
-    axios.get.mockResolvedValueOnce({ data: { amount: 149.99, entityId: 'order-1', entityType: 'order' } });
+    axios.get.mockResolvedValueOnce({ data: { _id: 'txn-1', amount: 149.99, entityId: 'order-1', entityType: 'order' } });
 
     const amount = await getTransactionAmount('loc-1', 'txn-1');
 
@@ -24,6 +24,33 @@ describe('getTransactionAmount', () => {
     expect(amount).toBe(149.99);
   });
 
+  test('fetches the transaction with a bearer token and v3 version header, returns the amount (array-wrapped response shape)', async () => {
+    // Confirmed live against a real pending invoice payment: this endpoint
+    // has been observed returning the transaction wrapped in a single-
+    // element array rather than the bare object GHL's own docs show — the
+    // amount is fully populated even pre-payment, contrary to an earlier
+    // assumption that it only appears once a charge completes.
+    getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
+    axios.get.mockResolvedValueOnce({
+      data: [{ _id: 'txn-1', amount: 1.95, currency: 'USD', status: 'pending', entityType: 'invoice', entityId: 'inv-1' }]
+    });
+
+    const amount = await getTransactionAmount('loc-1', 'txn-1');
+
+    expect(amount).toBe(1.95);
+  });
+
+  test('picks the array element whose _id matches the requested transactionId, not just index 0', async () => {
+    getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
+    axios.get.mockResolvedValueOnce({
+      data: [{ _id: 'some-other-txn', amount: 999 }, { _id: 'txn-1', amount: 1.95 }]
+    });
+
+    const amount = await getTransactionAmount('loc-1', 'txn-1');
+
+    expect(amount).toBe(1.95);
+  });
+
   test('URL-encodes the transactionId so it cannot inject extra query parameters or path segments', async () => {
     getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
     axios.get.mockResolvedValueOnce({ data: { amount: 10 } });
@@ -35,13 +62,13 @@ describe('getTransactionAmount', () => {
     expect(url).not.toContain('?locationId=OTHER_LOCATION');
   });
 
-  test('rejects with a clean 502 when the GHL request fails', async () => {
+  test('rejects with a clean 502 when the request fails', async () => {
     getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
     axios.get.mockRejectedValueOnce({ message: 'Request failed', response: { status: 404, data: { message: 'not found' } } });
 
     await expect(getTransactionAmount('loc-1', 'missing-txn')).rejects.toMatchObject({
       statusCode: 502,
-      message: 'Failed to verify transaction with GHL'
+      message: 'Failed to verify this transaction'
     });
   });
 
@@ -51,7 +78,17 @@ describe('getTransactionAmount', () => {
 
     await expect(getTransactionAmount('loc-1', 'txn-1')).rejects.toMatchObject({
       statusCode: 502,
-      message: 'GHL transaction response missing a valid amount'
+      message: 'Transaction response missing a valid amount'
+    });
+  });
+
+  test('rejects with a clean 502 when an array response has no matching or usable element', async () => {
+    getValidAccessToken.mockResolvedValueOnce('bearer-token-123');
+    axios.get.mockResolvedValueOnce({ data: [] });
+
+    await expect(getTransactionAmount('loc-1', 'txn-1')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'Transaction response missing a valid amount'
     });
   });
 

@@ -101,23 +101,14 @@ async function assertAmountMatchesGHL(locationId, transactionId, numericAmount) 
   const transactionAmount = await getTransactionAmount(locationId, transactionId);
   if (Math.abs(transactionAmount - numericAmount) > 0.01) {
     console.warn(
-      `[GHL Provider] Amount mismatch — requested=${numericAmount} ghlTransactionAmount=${transactionAmount} ` +
+      `[Payment Verify] Amount mismatch — requested=${numericAmount} transactionAmount=${transactionAmount} ` +
       `transactionId=${transactionId}`
     );
-    throw { statusCode: 400, message: 'Amount does not match GHL transaction' };
+    throw { statusCode: 400, message: 'Amount does not match the order on file' };
   }
 }
 
 router.get('/checkout', (req, res) => {
-  // Diagnostic only, for the "GHL never sends payment_initiate_props"
-  // investigation — logs whatever GHL actually attaches to the iframe
-  // request itself (query string, Referer), in case transaction data is
-  // passed here rather than (or in addition to) the documented postMessage
-  // handshake for this specific (invoice) context.
-  console.log(
-    `[GHL Provider Checkout] query=${JSON.stringify(req.query)} referer=${req.headers.referer || 'n/a'}`
-  );
-
   // GHL legitimately iframes this page, so X-Frame-Options (single-origin only)
   // is unusable here; CSP frame-ancestors allowlists GHL's origins instead.
   // script-src/frame-src/connect-src additionally allow Stripe.js and its own
@@ -156,7 +147,7 @@ router.get('/checkout', (req, res) => {
     .stripe-brand{display:flex;justify-content:center;margin-top:10px}
     .stripe-badge{display:inline-flex;align-items:center;padding:5px 12px;border-radius:5px;background:#635bff;color:#fff;font-size:14px;font-weight:700;font-style:italic;letter-spacing:-0.02em}
     #stripe-card-element{padding:12px;border:1px solid #ccc;border-radius:6px;margin-top:4px;background:#fff}
-    #stripe-card-errors{color:#b91c1c;font-size:12px;margin-top:6px;min-height:14px}
+    #stripe-card-errors,#nuvei-card-errors{color:#b91c1c;font-size:12px;margin-top:6px;min-height:14px}
     button{width:100%;margin-top:20px;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:17px;font-weight:600;cursor:pointer}
     button:disabled{background:#a78bfa;cursor:default}
     .secure{text-align:center;margin-top:14px;font-size:13px;color:#6b7280;font-weight:500}
@@ -198,6 +189,7 @@ router.get('/checkout', (req, res) => {
         <input id="ccCvv" required inputmode="numeric" maxlength="4" placeholder="CVV"/>
       </div>
     </div>
+    <div id="nuvei-card-errors"></div>
     <button type="submit" id="pb">Pay</button>
     <p class="secure">🔒 Nuvei Secure Payment</p>
   </form>
@@ -246,24 +238,6 @@ router.get('/checkout', (req, res) => {
         try { data = JSON.parse(data); } catch (e) { data = {}; }
       }
       const trusted = isTrustedGHLOrigin(event.origin);
-      // Diagnostic only, for the "message arrives but data.type doesn't
-      // match payment_initiate_props" investigation — only pings for
-      // trusted-origin messages (Stripe.js's own internal iframe chatter is
-      // frequent, irrelevant noise here and would otherwise dominate the
-      // logs). Sends the full raw payload, not just its type, since GHL's
-      // invoice flow may shape this differently than the funnel order-form
-      // flow the original implementation was built against. Remove
-      // routes/ghlProvider.js's /debug-message route once this is resolved.
-      if (trusted) {
-        let rawData;
-        try { rawData = JSON.stringify(data); } catch (e) { rawData = String(data); }
-        fetch('/ghl-provider/debug-message', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ origin: event.origin, fromParent: event.source === window.parent, rawData: rawData })
-        }).catch(function () {});
-      }
-
       if (!trusted) return;
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
@@ -350,6 +324,7 @@ router.get('/checkout', (req, res) => {
         return;
       }
       document.getElementById('pb').disabled = true;
+      document.getElementById('nuvei-card-errors').textContent = '';
 
       const nameParts = document.getElementById('cardName').value.trim().split(' ');
       const [expMonth, expYY] = document.getElementById('ccExpiry').value.split('/');
@@ -379,10 +354,12 @@ router.get('/checkout', (req, res) => {
         if (res.ok) {
           window.parent.postMessage({ type: 'custom_element_success_response', chargeId: body.chargeId }, '*');
         } else {
+          document.getElementById('nuvei-card-errors').textContent = body.error || 'Payment failed';
           window.parent.postMessage({ type: 'custom_element_error_response', error: { description: body.error || 'Payment failed' } }, '*');
           document.getElementById('pb').disabled = false;
         }
       } catch (err) {
+        document.getElementById('nuvei-card-errors').textContent = 'Network error. Please try again.';
         window.parent.postMessage({ type: 'custom_element_error_response', error: { description: 'Network error' } }, '*');
         document.getElementById('pb').disabled = false;
       }
@@ -496,14 +473,14 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
     const transactionAmount = await getTransactionAmount(locationId, transactionId);
     if (Math.abs(transactionAmount - numericAmount) > 0.01) {
       console.warn(
-        `[GHL Provider Charge] Amount mismatch — requested=${numericAmount} ghlTransactionAmount=${transactionAmount} ` +
+        `[Payment Charge] Amount mismatch — requested=${numericAmount} transactionAmount=${transactionAmount} ` +
         `transactionId=${transactionId}`
       );
-      return res.status(400).json({ error: 'Amount does not match GHL transaction' });
+      return res.status(400).json({ error: 'Amount does not match the order on file' });
     }
   } catch (error) {
-    console.error('[GHL Provider Charge] Transaction verification failed:', error.message);
-    return res.status(error.statusCode || 502).json({ error: 'Unable to verify transaction with GHL' });
+    console.error('[Payment Charge] Transaction verification failed:', error.message);
+    return res.status(error.statusCode || 502).json({ error: 'Unable to verify this transaction. Please try again.' });
   }
 
   const mode = resolveChargeMode(publishableKey);
@@ -562,8 +539,8 @@ router.post('/stripe-intent', chargeRateLimiter, async (req, res) => {
   try {
     await assertAmountMatchesGHL(locationId, transactionId, numericAmount);
   } catch (error) {
-    console.error('[GHL Provider Stripe] Transaction verification failed:', error.message);
-    return res.status(error.statusCode || 502).json({ error: error.statusCode === 400 ? error.message : 'Unable to verify transaction with GHL' });
+    console.error('[Payment Stripe] Transaction verification failed:', error.message);
+    return res.status(error.statusCode || 502).json({ error: error.statusCode === 400 ? error.message : 'Unable to verify this transaction. Please try again.' });
   }
 
   const mode = resolveChargeMode(publishableKey);
@@ -577,7 +554,7 @@ router.post('/stripe-intent', chargeRateLimiter, async (req, res) => {
     const intent = await createPaymentIntent({
       amount: numericAmount,
       currency: currency || 'USD',
-      description: `GHL order ${orderId || transactionId}`,
+      description: `Wellness111 order ${orderId || transactionId}`,
       metadata: { chargeId, transactionId, orderId: orderId || '', locationId },
       secretKey
     });
@@ -644,21 +621,6 @@ router.post('/stripe-confirm', chargeRateLimiter, async (req, res) => {
     console.error('[GHL Provider Stripe] Confirm failed:', error.message);
     res.status(error.statusCode || 500).json({ error: 'Unable to confirm payment' });
   }
-});
-
-/**
- * POST /ghl-provider/debug-message
- * Temporary diagnostic only, for the "payment_initiate_props never
- * arrives" investigation — the checkout page pings this with details of
- * every window "message" event it receives (any origin, any source),
- * bypassing the actual trust filter used for real handling. Lets this be
- * seen in server logs without needing the customer's own browser DevTools.
- * Safe to remove once the invoice flow is confirmed working: it doesn't
- * read or affect any payment state.
- */
-router.post('/debug-message', (req, res) => {
-  console.log('[GHL Provider Debug] postMessage received:', JSON.stringify(req.body));
-  res.status(200).json({ logged: true });
 });
 
 router.post('/query', (req, res) => {

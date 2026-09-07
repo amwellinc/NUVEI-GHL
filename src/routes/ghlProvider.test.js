@@ -221,6 +221,18 @@ describe('GET /ghl-provider/checkout', () => {
     expect(nuveiFormText).not.toContain('stripe-badge');
   });
 
+  test('the Nuvei form surfaces a failed charge visibly, not just via a postMessage the customer never sees', async () => {
+    // Regression guard for a reported "system froze" symptom on the US/CA
+    // leg: the Stripe form already shows failures in #stripe-card-errors,
+    // but the Nuvei form only posted a message to the parent frame with
+    // zero on-page feedback — indistinguishable from a hang whenever the
+    // parent frame doesn't render that message itself.
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain('id="nuvei-card-errors"');
+    expect(res.text).toContain("document.getElementById('nuvei-card-errors').textContent = body.error || 'Payment failed'");
+    expect(res.text).toContain("document.getElementById('nuvei-card-errors').textContent = 'Network error. Please try again.'");
+  });
+
   test('validates an incoming postMessage by origin, not strict window identity', async () => {
     const res = await request(buildApp()).get('/ghl-provider/checkout');
     // Regression guard: `event.source !== window.parent` silently rejects a
@@ -458,8 +470,20 @@ describe('POST /ghl-provider/charge', () => {
       .send(cardPayload({ amount: 0.01 }));
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/does not match/i);
+    expect(res.body.error).toBe('Amount does not match the order on file');
     expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  test('never mentions the CRM platform by name in any client-facing error text', async () => {
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockResolvedValueOnce(5000);
+    const mismatchRes = await request(buildApp()).post('/ghl-provider/charge').send(cardPayload({ amount: 0.01 }));
+    expect(mismatchRes.body.error).not.toMatch(/ghl/i);
+
+    getTransactionAmount.mockReset();
+    getTransactionAmount.mockRejectedValueOnce({ statusCode: 502, message: 'Upstream is down' });
+    const verifyFailRes = await request(buildApp()).post('/ghl-provider/charge').send(cardPayload());
+    expect(verifyFailRes.body.error).not.toMatch(/ghl/i);
   });
 
   test('accepts a requested amount within a cent of the transaction amount (float rounding tolerance)', async () => {
@@ -657,6 +681,16 @@ describe('POST /ghl-provider/stripe-intent', () => {
     );
   });
 
+  test('brands the PaymentIntent description with the storefront name, never the CRM platform name — it appears on the customer\'s statement/receipt', async () => {
+    stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
+
+    await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ orderId: 'order-77' }));
+
+    const [args] = stripeClientMock.createPaymentIntent.mock.calls;
+    expect(args[0].description).toBe('Wellness111 order order-77');
+    expect(args[0].description).not.toMatch(/ghl/i);
+  });
+
   test('uses the live Stripe key when GHL supplies the live publishableKey', async () => {
     stripeClientMock.createPaymentIntent.mockResolvedValueOnce({ id: 'pi_1', client_secret: 'pi_1_secret' });
 
@@ -671,17 +705,17 @@ describe('POST /ghl-provider/stripe-intent', () => {
     const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload({ amount: 25 }));
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Amount does not match GHL transaction');
+    expect(res.body.error).toBe('Amount does not match the order on file');
     expect(stripeClientMock.createPaymentIntent).not.toHaveBeenCalled();
   });
 
-  test('returns 502 with a generic message when the GHL transaction lookup itself fails', async () => {
-    getTransactionAmount.mockRejectedValueOnce({ statusCode: 502, message: 'GHL is down' });
+  test('returns 502 with a generic message when the transaction lookup itself fails', async () => {
+    getTransactionAmount.mockRejectedValueOnce({ statusCode: 502, message: 'Upstream is down' });
 
     const res = await request(buildApp()).post('/ghl-provider/stripe-intent').send(stripeIntentPayload());
 
     expect(res.status).toBe(502);
-    expect(res.body.error).toBe('Unable to verify transaction with GHL');
+    expect(res.body.error).toBe('Unable to verify this transaction. Please try again.');
   });
 
   test('rejects missing transactionId, locationId, or an invalid amount before touching GHL or Stripe', async () => {
@@ -796,20 +830,5 @@ describe('POST /ghl-provider/stripe-confirm', () => {
     const app = buildApp();
     const res = await request(app).post('/ghl-provider/stripe-confirm').send({ chargeId: 'x' });
     expect(res.status).toBe(400);
-  });
-});
-
-describe('POST /ghl-provider/debug-message', () => {
-  test('logs whatever the client reports and acknowledges — temporary diagnostic, no payment state involved', async () => {
-    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    const res = await request(buildApp())
-      .post('/ghl-provider/debug-message')
-      .send({ origin: 'https://app.gohighlevel.com', fromParent: true, trustedOrigin: true, dataType: 'payment_initiate_props' });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ logged: true });
-    const line = logSpy.mock.calls.map((args) => args.join(' ')).find((l) => l.includes('[GHL Provider Debug]'));
-    expect(line).toContain('payment_initiate_props');
-    logSpy.mockRestore();
   });
 });
