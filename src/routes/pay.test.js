@@ -209,7 +209,7 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.redirectUrl).toBe('https://amwellinc.com/thanks?transactionId=txn-redirect');
+    expect(res.body.redirectUrl).toBe('https://amwellinc.com/thanks?transactionId=Nuvei/txn-redirect');
   });
 
   test('does not redirect to a successUrl outside the allowed origins, falls back to the built-in confirmation page', async () => {
@@ -222,7 +222,7 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=success&transactionId=txn-nofollow');
+    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=success&transactionId=Nuvei/txn-nofollow');
   });
 
   test('a session cannot be charged twice — a successful charge consumes it', async () => {
@@ -355,7 +355,7 @@ describe('POST /pay/:sessionId/charge', () => {
 
     expect(res.status).toBe(200);
     expect(ghlMocks.createNote).toHaveBeenCalledWith('contact-123', expect.objectContaining({ body: expect.stringContaining('txn-ghl') }));
-    expect(ghlMocks.setCustomField).toHaveBeenCalledWith('contact-123', 'nuvei_transaction_id', 'txn-ghl');
+    expect(ghlMocks.setCustomField).toHaveBeenCalledWith('contact-123', 'nuvei_transaction_id', 'Nuvei/txn-ghl');
     expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-123', ['payment-completed']);
   });
 
@@ -401,7 +401,7 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.redirectUrl).toContain('transactionId=txn-ghl-fail');
+    expect(res.body.redirectUrl).toContain('transactionId=Nuvei/txn-ghl-fail');
     // The independently-failing note creation must not have blocked the
     // other two GHL side effects from still being attempted.
     expect(ghlMocks.setCustomField).toHaveBeenCalled();
@@ -492,7 +492,7 @@ describe('POST /pay/:sessionId/stripe-checkout', () => {
     await request(app).post(`/pay/${sessionId}/stripe-checkout`);
 
     expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
-      expect.objectContaining({ successUrl: 'https://amwellinc.com/thanks?transactionId={CHECKOUT_SESSION_ID}' })
+      expect.objectContaining({ successUrl: 'https://amwellinc.com/thanks?transactionId=Stripe/{CHECKOUT_SESSION_ID}' })
     );
   });
 

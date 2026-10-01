@@ -292,7 +292,14 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
       description: session.description
     });
 
-    console.log(`[Pay Link] Succeeded — transactionId=${result.transactionId} amount=${session.amount} ${session.currency}`);
+    // Prefixed with the gateway name so this reference is unambiguous
+    // wherever it ends up (GHL contact note, the redirect back to
+    // wellness111.com's own order/receipt system) — "172256543" alone reads
+    // as an opaque number; "Nuvei/172256543" tells whoever's looking at it
+    // (support staff, a reconciliation script) which gateway's dashboard to
+    // go look it up in.
+    const transactionReference = `Nuvei/${result.transactionId}`;
+    console.log(`[Pay Link] Succeeded — transactionId=${transactionReference} amount=${session.amount} ${session.currency}`);
 
     // The link itself may not have had a contactId (e.g. a generic "Buy
     // Now" link) — the card form always collects an email, so resolve one
@@ -305,7 +312,7 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     // must never turn into a failure response for a payment that went
     // through.
     await notifyGHL(contactId, {
-      transactionId: result.transactionId,
+      transactionId: transactionReference,
       amount: session.amount,
       currency: session.currency,
       description: session.description
@@ -314,7 +321,7 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     const successBase = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
       ? session.successUrl
       : `${returnBaseUrl(req)}/pay/return?status=success`;
-    const successUrl = successBase.includes('?') ? `${successBase}&transactionId=${result.transactionId}` : `${successBase}?transactionId=${result.transactionId}`;
+    const successUrl = successBase.includes('?') ? `${successBase}&transactionId=${transactionReference}` : `${successBase}?transactionId=${transactionReference}`;
     // Returned as JSON (not res.redirect) so the browser navigates via
     // window.location — fetch() would otherwise try to follow this redirect
     // itself, which fails whenever the target is a cross-origin page (e.g.
@@ -348,8 +355,12 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
     return res.status(404).json({ error: 'Payment session not found or expired' });
   }
 
+  // Stripe substitutes {CHECKOUT_SESSION_ID} with the real session id when it
+  // redirects the browser here — the literal "Stripe/" stays put right
+  // before it, so the reference arrives pre-labeled with its gateway, same
+  // as the Nuvei leg's transactionReference above.
   const successUrl = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
-    ? `${session.successUrl}${session.successUrl.includes('?') ? '&' : '?'}transactionId={CHECKOUT_SESSION_ID}`
+    ? `${session.successUrl}${session.successUrl.includes('?') ? '&' : '?'}transactionId=Stripe/{CHECKOUT_SESSION_ID}`
     : `${returnBaseUrl(req)}/pay/return?status=success`;
   const cancelUrl = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
     ? session.failureUrl

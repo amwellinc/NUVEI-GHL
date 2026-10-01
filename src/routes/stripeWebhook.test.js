@@ -76,7 +76,7 @@ describe('POST /pay/stripe/webhook', () => {
 
     expect(res.status).toBe(200);
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', {
-      transactionId: 'pi_123',
+      transactionId: 'Stripe/pi_123',
       amount: '49.99',
       currency: 'USD',
       description: ''
@@ -122,7 +122,7 @@ describe('POST /pay/stripe/webhook', () => {
 
     await post(app);
 
-    expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', expect.objectContaining({ transactionId: 'cs_test_2' }));
+    expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', expect.objectContaining({ transactionId: 'Stripe/cs_test_2' }));
   });
 
   test('a payment with no contactId in metadata and no customer email still acknowledges 200 (notifyGHL is a no-op without a contactId)', async () => {
@@ -158,7 +158,7 @@ describe('POST /pay/stripe/webhook', () => {
     await post(app);
 
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', {
-      transactionId: 'pi_123',
+      transactionId: 'Stripe/pi_123',
       amount: '49.99',
       currency: 'USD',
       description: 'Cart total (2 items)'

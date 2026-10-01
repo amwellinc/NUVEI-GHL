@@ -51,7 +51,10 @@ router.post('/', async (req, res) => {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     if (session.payment_status === 'paid') {
-      const transactionId = session.payment_intent || session.id;
+      // Prefixed with the gateway name — see the matching Nuvei-leg comment
+      // in routes/pay.js — so this reference is unambiguous wherever it
+      // ends up (the GHL contact note, wellness111.com's own receipt).
+      const transactionId = `Stripe/${session.payment_intent || session.id}`;
       const amount = (session.amount_total / 100).toFixed(2);
       const currency = (session.currency || 'usd').toUpperCase();
       const description = session.metadata?.description || '';
