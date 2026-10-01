@@ -4,12 +4,10 @@ const express = require('express');
 jest.mock('../services/stripeClient');
 jest.mock('../lib/ghlNotify');
 jest.mock('../lib/ghlContact');
-jest.mock('../lib/ghlOrders');
 
 let stripeClient;
 let ghlNotify;
 let ghlContact;
-let ghlOrders;
 let stripeWebhookRoutes;
 
 beforeEach(() => {
@@ -19,8 +17,6 @@ beforeEach(() => {
   ghlNotify.notifyGHL.mockResolvedValue(undefined);
   ghlContact = require('../lib/ghlContact');
   ghlContact.resolveContactId.mockResolvedValue('');
-  ghlOrders = require('../lib/ghlOrders');
-  ghlOrders.createOrderOpportunity.mockResolvedValue(undefined);
   stripeWebhookRoutes = require('./stripeWebhook');
 });
 
@@ -82,7 +78,8 @@ describe('POST /pay/stripe/webhook', () => {
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', {
       transactionId: 'pi_123',
       amount: '49.99',
-      currency: 'USD'
+      currency: 'USD',
+      description: ''
     });
   });
 
@@ -152,7 +149,7 @@ describe('POST /pay/stripe/webhook', () => {
     expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('resolved-contact', expect.any(Object));
   });
 
-  test('places a confirmed payment into the configured GHL order pipeline', async () => {
+  test('passes the cart description through to the GHL contact note for a confirmed payment', async () => {
     const app = buildApp();
     stripeClient.constructWebhookEvent.mockReturnValue(
       checkoutCompletedEvent({ metadata: { contactId: 'contact-1', description: 'Cart total (2 items)' } })
@@ -160,20 +157,20 @@ describe('POST /pay/stripe/webhook', () => {
 
     await post(app);
 
-    expect(ghlOrders.createOrderOpportunity).toHaveBeenCalledWith({
-      contactId: 'contact-1',
-      description: 'Cart total (2 items)',
+    expect(ghlNotify.notifyGHL).toHaveBeenCalledWith('contact-1', {
+      transactionId: 'pi_123',
       amount: '49.99',
-      transactionId: 'pi_123'
+      currency: 'USD',
+      description: 'Cart total (2 items)'
     });
   });
 
-  test('never places an abandoned or unconfirmed payment into the order pipeline', async () => {
+  test('never notifies GHL for an abandoned or unconfirmed payment', async () => {
     const app = buildApp();
     stripeClient.constructWebhookEvent.mockReturnValue(checkoutCompletedEvent({ payment_status: 'unpaid' }));
 
     await post(app);
 
-    expect(ghlOrders.createOrderOpportunity).not.toHaveBeenCalled();
+    expect(ghlNotify.notifyGHL).not.toHaveBeenCalled();
   });
 });

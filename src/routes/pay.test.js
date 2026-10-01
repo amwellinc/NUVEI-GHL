@@ -22,11 +22,7 @@ const ENV_KEYS = [
   'NUVEI_SDK_KEY',
   'NUVEI_SANDBOX_MODE',
   'GHL_API_TOKEN',
-  'GHL_LOCATION_ID',
-  'GHL_ORDERS_PIPELINE_ID',
-  'GHL_ORDERS_NEW_STAGE_ID',
-  'GHL_ABANDONED_CART_PIPELINE_ID',
-  'GHL_ABANDONED_CART_STAGE_ID'
+  'GHL_LOCATION_ID'
 ];
 let savedEnv;
 
@@ -40,10 +36,6 @@ beforeEach(() => {
   process.env.NUVEI_SDK_KEY = 'key';
   process.env.GHL_API_TOKEN = 'pit-test-token';
   process.env.GHL_LOCATION_ID = 'loc-ghl-1';
-  process.env.GHL_ORDERS_PIPELINE_ID = 'orders-pipeline-1';
-  process.env.GHL_ORDERS_NEW_STAGE_ID = 'orders-stage-new';
-  process.env.GHL_ABANDONED_CART_PIPELINE_ID = 'cart-pipeline-1';
-  process.env.GHL_ABANDONED_CART_STAGE_ID = 'cart-stage-new';
   delete process.env.NUVEI_SANDBOX_MODE;
 
   jest.resetModules();
@@ -92,13 +84,12 @@ function mockGHLClient() {
   const setCustomField = jest.fn().mockResolvedValue({});
   const addTags = jest.fn().mockResolvedValue({});
   const upsertContact = jest.fn().mockResolvedValue({ contact: { id: 'resolved-contact' } });
-  const createOpportunity = jest.fn().mockResolvedValue({ id: 'opp-1' });
-  // lib/ghlNotify, lib/ghlContact, and lib/ghlOrders each construct their own
-  // GHLClient singleton at module load — all land on this one shared mock
+  // lib/ghlNotify and lib/ghlContact each construct their own GHLClient
+  // singleton at module load — both land on this one shared mock
   // implementation, so a single set of jest.fn()s here covers every call
   // site regardless of which module made it.
-  GHLClient.mockImplementation(() => ({ createNote, setCustomField, addTags, upsertContact, createOpportunity }));
-  return { createNote, setCustomField, addTags, upsertContact, createOpportunity };
+  GHLClient.mockImplementation(() => ({ createNote, setCustomField, addTags, upsertContact }));
+  return { createNote, setCustomField, addTags, upsertContact };
 }
 
 function signedQuery(overrides = {}) {
@@ -397,7 +388,6 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(ghlMocks.createNote).not.toHaveBeenCalled();
     expect(ghlMocks.setCustomField).not.toHaveBeenCalled();
     expect(ghlMocks.addTags).not.toHaveBeenCalled();
-    expect(ghlMocks.createOpportunity).not.toHaveBeenCalled();
   });
 
   test('a GHL-side failure (e.g. note creation fails) does not fail the payment response — the charge already succeeded', async () => {
@@ -418,7 +408,11 @@ describe('POST /pay/:sessionId/charge', () => {
     expect(ghlMocks.addTags).toHaveBeenCalled();
   });
 
-  test('a successful charge places the order into the configured GHL pipeline for fulfillment', async () => {
+  test('a successful charge records the order description on the GHL contact note for fulfillment', async () => {
+    // No Opportunity/pipeline involved — GHL has no public API to create a
+    // native "Order", so the order's details live entirely on the contact's
+    // note. This also means the record can't 404 the way the old
+    // pipeline-based tracking did when a pipeline was renamed or deleted.
     const app = buildApp();
     mockSuccessfulSale('txn-order');
     const sessionId = await createSession(app, { contactId: 'contact-789', description: 'Alka H2 Bottle x1' });
@@ -428,35 +422,9 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(ghlMocks.createOpportunity).toHaveBeenCalledWith({
-      pipelineId: 'orders-pipeline-1',
-      pipelineStageId: 'orders-stage-new',
-      contactId: 'contact-789',
-      name: 'Order: Alka H2 Bottle x1',
-      monetaryValue: 25,
-      source: 'wellness111.com checkout'
-    });
-  });
-
-  test('an order opportunity is not created when GHL_ORDERS_PIPELINE_ID is not configured', async () => {
-    delete process.env.GHL_ORDERS_PIPELINE_ID;
-    jest.resetModules();
-    NuveiClient = require('../services/nuveiClient');
-    GHLClient = require('../services/ghlClient');
-    createSignedLink = require('../lib/paymentLinks').createSignedLink;
-    ghlMocks = mockGHLClient();
-    payRoutes = require('./pay');
-
-    const app = buildApp();
-    mockSuccessfulSale('txn-no-pipeline');
-    const sessionId = await createSession(app, { contactId: 'contact-1' });
-
-    const res = await request(app).post(`/pay/${sessionId}/charge`).send({
-      email: 'a@b.com', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123'
-    });
-
-    expect(res.status).toBe(200);
-    expect(ghlMocks.createOpportunity).not.toHaveBeenCalled();
+    expect(ghlMocks.createNote).toHaveBeenCalledWith('contact-789', expect.objectContaining({
+      body: expect.stringContaining('Alka H2 Bottle x1')
+    }));
   });
 });
 
@@ -589,7 +557,7 @@ describe('abandoned cart tracking', () => {
     jest.useRealTimers();
   });
 
-  test('a session with a known contact that expires without ever charging creates an abandoned-cart opportunity', async () => {
+  test('a session with a known contact that expires without ever charging records an abandoned-cart note and tag', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick'] });
     const app = buildApp();
 
@@ -601,17 +569,13 @@ describe('abandoned cart tracking', () => {
     jest.setSystemTime(new Date(Date.now() + SESSION_TTL_MS + 60 * 1000));
     await request(app).get('/pay' + signedQuery());
 
-    expect(ghlMocks.createOpportunity).toHaveBeenCalledWith({
-      pipelineId: 'cart-pipeline-1',
-      pipelineStageId: 'cart-stage-new',
-      contactId: 'contact-abandoned',
-      name: 'Abandoned Cart: Cart total',
-      monetaryValue: 40,
-      source: 'wellness111.com checkout'
-    });
+    expect(ghlMocks.createNote).toHaveBeenCalledWith('contact-abandoned', expect.objectContaining({
+      body: expect.stringContaining('Cart total')
+    }));
+    expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-abandoned', ['abandoned-cart']);
   });
 
-  test('a session with no known contact that expires unused does not create an abandoned-cart opportunity', async () => {
+  test('a session with no known contact that expires unused does not record an abandoned-cart note', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick'] });
     const app = buildApp();
 
@@ -621,10 +585,11 @@ describe('abandoned cart tracking', () => {
     jest.setSystemTime(new Date(Date.now() + SESSION_TTL_MS + 60 * 1000));
     await request(app).get('/pay' + signedQuery());
 
-    expect(ghlMocks.createOpportunity).not.toHaveBeenCalled();
+    expect(ghlMocks.createNote).not.toHaveBeenCalled();
+    expect(ghlMocks.addTags).not.toHaveBeenCalled();
   });
 
-  test('a session that successfully charges before expiring does not also create an abandoned-cart opportunity', async () => {
+  test('a session that successfully charges before expiring does not also record an abandoned-cart tag', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick'] });
     const app = buildApp();
     mockSuccessfulSale('txn-charged');
@@ -640,9 +605,9 @@ describe('abandoned cart tracking', () => {
     jest.setSystemTime(new Date(Date.now() + SESSION_TTL_MS + 60 * 1000));
     await request(app).get('/pay' + signedQuery());
 
-    // Only the order opportunity from the successful charge exists — the
+    // Only the completed-order tag from the successful charge exists — the
     // already-consumed (deleted) session can't also be swept as abandoned.
-    expect(ghlMocks.createOpportunity).toHaveBeenCalledTimes(1);
-    expect(ghlMocks.createOpportunity).toHaveBeenCalledWith(expect.objectContaining({ pipelineId: 'orders-pipeline-1' }));
+    expect(ghlMocks.addTags).toHaveBeenCalledTimes(1);
+    expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-charged', ['payment-completed']);
   });
 });

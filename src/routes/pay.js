@@ -4,9 +4,8 @@ const crypto = require('crypto');
 const NuveiClient = require('../services/nuveiClient');
 const { createCheckoutSession } = require('../services/stripeClient');
 const { verifyLink } = require('../lib/paymentLinks');
-const { notifyGHL } = require('../lib/ghlNotify');
+const { notifyGHL, notifyAbandonedCart } = require('../lib/ghlNotify');
 const { resolveContactId } = require('../lib/ghlContact');
-const { createOrderOpportunity, createAbandonedCartOpportunity } = require('../lib/ghlOrders');
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
 
@@ -58,11 +57,10 @@ function cleanExpiredSessions() {
       // Only trackable when the session already had a known contact (set at
       // link-creation time via an email) — an anonymous session that never
       // reached a charge attempt has no one to notify a recovery workflow
-      // about. createAbandonedCartOpportunity never throws, so this can't
-      // break the sweep even if GHL is down.
+      // about. notifyAbandonedCart never throws, so this can't break the
+      // sweep even if GHL is down.
       if (session.contactId) {
-        createAbandonedCartOpportunity({
-          contactId: session.contactId,
+        notifyAbandonedCart(session.contactId, {
           description: session.description,
           amount: session.amount
         });
@@ -302,12 +300,16 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     // tie-in entirely.
     const contactId = session.contactId || (await resolveContactId(email, firstName, lastName));
 
-    // notifyGHL/createOrderOpportunity never throw (each GHL call is
-    // independently try/caught internally) — the charge already succeeded,
-    // so a GHL-side hiccup here must never turn into a failure response for
-    // a payment that went through.
-    await notifyGHL(contactId, { transactionId: result.transactionId, amount: session.amount, currency: session.currency });
-    await createOrderOpportunity({ contactId, description: session.description, amount: session.amount, transactionId: result.transactionId });
+    // notifyGHL never throws (each GHL call is independently try/caught
+    // internally) — the charge already succeeded, so a GHL-side hiccup here
+    // must never turn into a failure response for a payment that went
+    // through.
+    await notifyGHL(contactId, {
+      transactionId: result.transactionId,
+      amount: session.amount,
+      currency: session.currency,
+      description: session.description
+    });
 
     const successBase = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
       ? session.successUrl

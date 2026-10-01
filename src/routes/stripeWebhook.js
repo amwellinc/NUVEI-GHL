@@ -3,7 +3,6 @@ const router = express.Router();
 const { constructWebhookEvent } = require('../services/stripeClient');
 const { notifyGHL } = require('../lib/ghlNotify');
 const { resolveContactId } = require('../lib/ghlContact');
-const { createOrderOpportunity } = require('../lib/ghlOrders');
 
 // Stripe retries webhook delivery on any non-2xx response or timeout — this
 // is expected, documented behavior, not a failure — so a duplicate delivery
@@ -68,8 +67,7 @@ router.post('/', async (req, res) => {
         contactId = await resolveContactId(session.customer_details.email, firstName, rest.join(' '));
       }
 
-      await notifyGHL(contactId, { transactionId, amount, currency });
-      await createOrderOpportunity({ contactId, description, amount, transactionId });
+      await notifyGHL(contactId, { transactionId, amount, currency, description });
       console.log(`[Stripe Webhook] Payment confirmed — session=${session.id} amount=${amount} ${currency}`);
     }
   }
