@@ -249,7 +249,7 @@ describe('POST /pay/:sessionId/charge', () => {
 
     const first = await request(app).post(`/pay/${sessionId}/charge`).send(payload);
     expect(first.status).toBe(200);
-    expect(first.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
+    expect(first.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=failed');
 
     const second = await request(app).post(`/pay/${sessionId}/charge`).send({ ...payload, ccNumber: '5555555555554444' });
     expect(second.status).toBe(404);
@@ -327,7 +327,7 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.redirectUrl).toBe('https://amwellinc.com/failed');
+    expect(res.body.redirectUrl).toBe('https://amwellinc.com/failed?status=failed');
   });
 
   test('a decline falls back to the built-in confirmation page when no allowed failureUrl is configured', async () => {
@@ -341,7 +341,7 @@ describe('POST /pay/:sessionId/charge', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=cancelled');
+    expect(res.body.redirectUrl).toBe('https://am333-nuvei-production.up.railway.app/pay/return?status=failed');
   });
 
   test('a successful charge with a contactId on the link records a note, custom field, and tag on that GHL contact', async () => {
@@ -496,6 +496,18 @@ describe('POST /pay/:sessionId/stripe-checkout', () => {
     );
   });
 
+  test('appends status=cancelled to an allowed failureUrl — reaching this page always means abandonment, since a declined card is handled inline on Stripe\'s own page', async () => {
+    const app = buildApp();
+    stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
+    const sessionId = await createSession(app, { failureUrl: 'https://amwellinc.com/cancelled' });
+
+    await request(app).post(`/pay/${sessionId}/stripe-checkout`);
+
+    expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cancelUrl: 'https://amwellinc.com/cancelled?status=cancelled' })
+    );
+  });
+
   test('falls back to the built-in /pay/return page when no allowed successUrl/failureUrl is configured', async () => {
     const app = buildApp();
     stripeClient.createCheckoutSession.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com/cs_1' });
@@ -542,11 +554,25 @@ describe('GET /pay/return', () => {
     expect(res.text).not.toContain('<script>alert(1)</script>');
   });
 
-  test('shows a cancelled message for any other status, with no order number', async () => {
+  test('shows a cancelled message for status=cancelled, with no order number', async () => {
     const res = await request(buildApp()).get('/pay/return?status=cancelled');
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Payment Cancelled/);
     expect(res.text).not.toContain('Order #');
+  });
+
+  test('shows a distinct failed message for status=failed — a gateway decline, not a shopper-initiated cancellation', async () => {
+    const res = await request(buildApp()).get('/pay/return?status=failed');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Payment Failed/);
+    expect(res.text).toMatch(/declined/i);
+    expect(res.text).not.toContain('Order #');
+  });
+
+  test('falls back to the cancelled message for any unrecognized status value', async () => {
+    const res = await request(buildApp()).get('/pay/return?status=something-unexpected');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Payment Cancelled/);
   });
 });
 

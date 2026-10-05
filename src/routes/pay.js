@@ -331,10 +331,18 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
   } catch (error) {
     console.error('[Pay Link] Charge failed:', error.message, redactErrorDetails(error.details));
 
-    const failureBase = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
-      ? session.failureUrl
-      : `${returnBaseUrl(req)}/pay/return?status=cancelled`;
-    return res.status(200).json({ redirectUrl: failureBase });
+    // A gateway decline is a definite "payment failed" outcome (as opposed
+    // to the Stripe leg's cancelUrl, which only fires on genuine
+    // abandonment — Stripe handles card declines inline on its own hosted
+    // page without ever redirecting back here) — so this is the one place
+    // status=failed is the correct label, not status=cancelled. Previously
+    // the merchant's own failureUrl got no status indicator appended at
+    // all, leaving wellness111.com's own order/receipt system with no way
+    // to tell a decline happened.
+    const failureUrl = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
+      ? `${session.failureUrl}${session.failureUrl.includes('?') ? '&' : '?'}status=failed`
+      : `${returnBaseUrl(req)}/pay/return?status=failed`;
+    return res.status(200).json({ redirectUrl: failureUrl });
   }
 });
 
@@ -362,8 +370,14 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
   const successUrl = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
     ? `${session.successUrl}${session.successUrl.includes('?') ? '&' : '?'}transactionId=Stripe/{CHECKOUT_SESSION_ID}`
     : `${returnBaseUrl(req)}/pay/return?status=success`;
+  // Reaching cancelUrl at all means the shopper abandoned/backed out of
+  // Stripe's own hosted page — a declined card attempt is handled entirely
+  // within that page (Stripe lets them retry in place) and never redirects
+  // here, so status=cancelled (not status=failed) is the accurate label for
+  // this path. Previously the merchant's own failureUrl got no status
+  // indicator appended at all.
   const cancelUrl = isAllowedRedirect(session.failureUrl, ALLOWED_REDIRECT_ORIGINS)
-    ? session.failureUrl
+    ? `${session.failureUrl}${session.failureUrl.includes('?') ? '&' : '?'}status=cancelled`
     : `${returnBaseUrl(req)}/pay/return?status=cancelled`;
 
   try {
@@ -393,8 +407,21 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
  * — nothing else needs to change.
  */
 router.get('/return', pageRateLimiter, (req, res) => {
-  const succeeded = req.query.status === 'success';
+  // Three distinct outcomes, not just success-vs-everything-else: a genuine
+  // gateway decline (status=failed, from the Nuvei leg's catch block) reads
+  // differently to a shopper than an abandoned/backed-out-of checkout
+  // (status=cancelled, the Stripe leg) — collapsing both into "Cancelled"
+  // left no way to tell a shopper (or wellness111.com's own order system,
+  // when it falls back to this page) that their card was actually declined.
+  const status = req.query.status === 'success' ? 'success' : req.query.status === 'failed' ? 'failed' : 'cancelled';
+  const succeeded = status === 'success';
   const transactionId = req.query.transactionId ? escapeHtml(String(req.query.transactionId)) : '';
+
+  const copy = {
+    success: { title: 'Payment Successful', heading: '✅ Payment Successful', message: 'Thank you — your payment has been received.' },
+    failed: { title: 'Payment Failed', heading: '❌ Payment Failed', message: 'Your card was declined. Please check your card details and try again.' },
+    cancelled: { title: 'Payment Cancelled', heading: 'Payment Cancelled', message: 'Your payment was not completed. You can close this page and try again.' }
+  }[status];
 
   res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
   res.setHeader('X-Frame-Options', 'DENY');
@@ -404,7 +431,7 @@ router.get('/return', pageRateLimiter, (req, res) => {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${succeeded ? 'Payment Successful' : 'Payment Cancelled'}</title>
+  <title>${copy.title}</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -416,8 +443,8 @@ router.get('/return', pageRateLimiter, (req, res) => {
 </head>
 <body>
 <div class="card">
-  <h1>${succeeded ? '✅ Payment Successful' : 'Payment Cancelled'}</h1>
-  <p>${succeeded ? 'Thank you — your payment has been received.' : 'Your payment was not completed. You can close this page and try again.'}</p>
+  <h1>${copy.heading}</h1>
+  <p>${copy.message}</p>
   ${succeeded && transactionId ? `<div class="order-number">Order #${transactionId}</div>` : ''}
 </div>
 </body>
