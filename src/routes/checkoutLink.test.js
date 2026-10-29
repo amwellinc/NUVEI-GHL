@@ -3,8 +3,10 @@ const express = require('express');
 const bodyParser = require('body-parser');
 
 jest.mock('../services/ghlClient');
+jest.mock('../services/ghlProductsClient');
 
 let GHLClient;
+let ghlProductsClient;
 let checkoutLinkRoutes;
 let ghlMocks;
 
@@ -22,6 +24,8 @@ beforeEach(() => {
   jest.resetModules();
   GHLClient = require('../services/ghlClient');
   ghlMocks = mockGHLClient();
+  ghlProductsClient = require('../services/ghlProductsClient');
+  ghlProductsClient.getPriceAmount.mockReset();
   checkoutLinkRoutes = require('./checkoutLink');
 });
 
@@ -164,5 +168,103 @@ describe('POST /pay/create-link', () => {
     const app = buildApp();
     await request(app).post('/pay/create-link').set('Origin', 'https://www.wellness111.com').send({ amount: 10 });
     expect(ghlMocks.upsertContact).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /pay/create-link — catalog-verified price (productId + priceId)', () => {
+  test('looks up the real price server-side and signs that amount — a client-submitted amount is ignored entirely', async () => {
+    ghlProductsClient.getPriceAmount.mockResolvedValueOnce({ amount: 19.9, currency: 'USD' });
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', priceId: 'price-1', amount: 0.01, currency: 'USD', description: 'Bundle' });
+
+    expect(res.status).toBe(200);
+    expect(ghlProductsClient.getPriceAmount).toHaveBeenCalledWith('loc-ghl-1', 'product-1', 'price-1');
+    const url = new URL(res.body.url);
+    expect(url.searchParams.get('amount')).toBe('19.90');
+    expect(url.searchParams.get('currency')).toBe('USD');
+  });
+
+  test('multiplies the looked-up unit price by quantity', async () => {
+    ghlProductsClient.getPriceAmount.mockResolvedValueOnce({ amount: 10, currency: 'USD' });
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', priceId: 'price-1', quantity: 3 });
+
+    expect(res.status).toBe(200);
+    const url = new URL(res.body.url);
+    expect(url.searchParams.get('amount')).toBe('30.00');
+  });
+
+  test('defaults quantity to 1 when omitted, zero, negative, or non-numeric', async () => {
+    ghlProductsClient.getPriceAmount.mockResolvedValue({ amount: 5, currency: 'USD' });
+    const app = buildApp();
+
+    for (const quantity of [undefined, 0, -1, 'not-a-number']) {
+      const res = await request(app)
+        .post('/pay/create-link')
+        .set('Origin', 'https://www.wellness111.com')
+        .send({ productId: 'product-1', priceId: 'price-1', quantity });
+      const url = new URL(res.body.url);
+      expect(url.searchParams.get('amount')).toBe('5.00');
+    }
+  });
+
+  test('rejects a quantity over the cap without calling GHL', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', priceId: 'price-1', quantity: 101 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/quantity/);
+    expect(ghlProductsClient.getPriceAmount).not.toHaveBeenCalled();
+  });
+
+  test('propagates a 400 when the priceId does not match any price on the product, without minting a link', async () => {
+    ghlProductsClient.getPriceAmount.mockRejectedValueOnce({ statusCode: 400, message: 'Price not found for this product' });
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', priceId: 'wrong-price' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Price not found for this product');
+  });
+
+  test('propagates a 502 when the GHL price lookup itself fails, without falling back to any client-submitted amount', async () => {
+    ghlProductsClient.getPriceAmount.mockRejectedValueOnce({ statusCode: 502, message: 'Failed to verify product price' });
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', priceId: 'price-1', amount: 0.01 });
+
+    expect(res.status).toBe(502);
+    expect(res.body.url).toBeUndefined();
+  });
+
+  test('ignores a lone productId or priceId without its pair — falls back to the raw amount path', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/pay/create-link')
+      .set('Origin', 'https://www.wellness111.com')
+      .send({ productId: 'product-1', amount: 25 });
+
+    expect(res.status).toBe(200);
+    expect(ghlProductsClient.getPriceAmount).not.toHaveBeenCalled();
+    const url = new URL(res.body.url);
+    expect(url.searchParams.get('amount')).toBe('25.00');
   });
 });

@@ -4,9 +4,11 @@ const cors = require('cors');
 const { createSignedLink } = require('../lib/paymentLinks');
 const { createRateLimiter, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 const { resolveContactId } = require('../lib/ghlContact');
+const { getPriceAmount } = require('../services/ghlProductsClient');
 
 const ALLOWED_ORIGINS = getAllowedRedirectOrigins();
 const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_QUANTITY = 100;
 
 // Public and cross-origin by design — a storefront's own cart JS calls this
 // directly from the browser. Gate it to the storefront origin(s) rather
@@ -34,9 +36,20 @@ router.use(cors(corsOptions));
  * fresh signed /pay link for whatever the cart total is at that moment —
  * the storefront never talks to Nuvei/Stripe/GHL itself, it only ever
  * receives a signed URL to send the customer to.
+ *
+ * Two ways to specify the amount:
+ *  - productId + priceId (preferred): the price is looked up server-side
+ *    from GHL's own product catalog, and any client-submitted amount/
+ *    currency is ignored entirely — a shopper intercepting this request
+ *    (DevTools, a proxy) cannot lower what gets signed into the link,
+ *    since the number never came from them in the first place.
+ *  - a raw amount (legacy): trusted as-is, for callers that don't yet pass
+ *    productId/priceId — e.g. a non-catalog custom-amount link. This path
+ *    carries no protection against a tampered cart total; logged whenever
+ *    used so it's visible which callers still need migrating.
  */
 router.post('/', createLinkRateLimiter, async (req, res) => {
-  const { amount, currency, description, email, firstName, lastName, successUrl, failureUrl } = req.body || {};
+  const { amount, currency, description, email, firstName, lastName, successUrl, failureUrl, productId, priceId, quantity } = req.body || {};
 
   if (description !== undefined && String(description).length > MAX_DESCRIPTION_LENGTH) {
     return res.status(400).json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` });
@@ -51,12 +64,32 @@ router.post('/', createLinkRateLimiter, async (req, res) => {
     return res.status(500).json({ error: 'APP_URL is not configured' });
   }
 
+  let finalAmount = amount;
+  let finalCurrency = currency;
+
+  if (productId && priceId) {
+    const qty = Number.isInteger(Number(quantity)) && Number(quantity) > 0 ? Number(quantity) : 1;
+    if (qty > MAX_QUANTITY) {
+      return res.status(400).json({ error: `quantity must be ${MAX_QUANTITY} or fewer` });
+    }
+
+    try {
+      const price = await getPriceAmount(process.env.GHL_LOCATION_ID, productId, priceId);
+      finalAmount = (price.amount * qty).toFixed(2);
+      finalCurrency = price.currency;
+    } catch (error) {
+      return res.status(error.statusCode || 502).json({ error: error.message });
+    }
+  } else {
+    console.warn('[Pay Link] create-link called without productId/priceId — trusting the client-submitted amount directly, unverified against any catalog price.');
+  }
+
   const contactId = await resolveContactId(email, firstName, lastName);
 
   try {
     const url = createSignedLink(`${process.env.APP_URL}/pay`, {
-      amount,
-      currency,
+      amount: finalAmount,
+      currency: finalCurrency,
       description,
       successUrl,
       failureUrl,
