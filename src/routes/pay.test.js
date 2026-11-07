@@ -682,3 +682,22 @@ describe('a staff charge from Admin (a link with a ref)', () => {
     expect(ghlMocks.createNote).toHaveBeenCalled();
   });
 });
+
+describe('a website payment tells Admin the order was paid', () => {
+  const card = { email: 'a@b.com', firstName: 'A', lastName: 'B', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; delete process.env.AMWELLINC_WEBSITE_PAID_URL; delete process.env.PAYMENT_LINK_ALLOWED_REDIRECT_ORIGINS; });
+  test('with its order number, and no card details', async () => {
+    process.env.AMWELLINC_WEBSITE_PAID_URL = 'https://admin.example/api/webhooks/gateway-website';
+    const sent = [];
+    const app = buildApp();
+    mockSuccessfulSale('txn-11');
+    const url = createSignedLink('http://x/pay', { amount: 25, contactId: 'c1', successUrl: 'https://wellness111.com/thank-you?order=W111-77' });
+    const page = await request(app).get('/pay?' + url.split('?')[1]);
+    const id = /\/([0-9a-f-]{36})\/charge/.exec(page.text)[1];
+    global.fetch = jest.fn(async (_u, o) => { sent.push(JSON.parse(o.body)); return { ok: true, status: 200 }; });
+    await request(app).post(`/pay/${id}/charge`).send(card).expect(200);
+    expect(sent).toEqual([{ orderNumber: 'W111-77', gateway: 'Nuvei', transactionId: 'Nuvei/txn-11', amount: '25.00', currency: 'USD' }]);
+    expect(JSON.stringify(sent)).not.toContain('4111');
+  });
+});

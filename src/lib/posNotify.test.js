@@ -35,3 +35,34 @@ describe('notifyPosResult', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('orderNumberFrom', () => {
+  const { orderNumberFrom } = require('./posNotify');
+  it('reads the order number from the website return address', () => {
+    expect(orderNumberFrom('https://wellness111.com/thank-you?order=W111-20261107-3120367616&email=a')).toBe('W111-20261107-3120367616');
+  });
+  it('is empty for anything else', () => {
+    expect(orderNumberFrom('https://wellness111.com/thank-you')).toBe('');
+    expect(orderNumberFrom('')).toBe('');
+    expect(orderNumberFrom('not a url')).toBe('');
+  });
+});
+
+describe('notifyWebsitePayment', () => {
+  const { notifyWebsitePayment } = require('./posNotify');
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; delete process.env.AMWELLINC_WEBSITE_PAID_URL; });
+  it('tells Admin an order was paid', async () => {
+    process.env.AMWELLINC_WEBSITE_PAID_URL = 'https://admin.example/api/webhooks/gateway-website';
+    const sent = [];
+    global.fetch = jest.fn(async (u, o) => { sent.push([u, JSON.parse(o.body)]); return { ok: true, status: 200 }; });
+    await notifyWebsitePayment({ orderNumber: 'W111-1', transactionId: 'Stripe/x', amount: '293.00', currency: 'USD', gateway: 'Stripe' }, { retryDelayMs: 0 });
+    expect(sent[0][0]).toContain('gateway-website');
+    expect(sent[0][1].orderNumber).toBe('W111-1');
+  });
+  it('does nothing without an order number or address', async () => {
+    global.fetch = jest.fn();
+    await notifyWebsitePayment({ orderNumber: '', transactionId: 'x', amount: '1', currency: 'USD', gateway: 'Nuvei' }, { retryDelayMs: 0 });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});

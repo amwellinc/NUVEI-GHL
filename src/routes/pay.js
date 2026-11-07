@@ -5,7 +5,7 @@ const NuveiClient = require('../services/nuveiClient');
 const { createCheckoutSession } = require('../services/stripeClient');
 const { verifyLink } = require('../lib/paymentLinks');
 const { notifyGHL, notifyAbandonedCart } = require('../lib/ghlNotify');
-const { notifyPosResult } = require('../lib/posNotify');
+const { notifyPosResult, notifyWebsitePayment, orderNumberFrom } = require('../lib/posNotify');
 const { resolveContactId } = require('../lib/ghlContact');
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
@@ -97,6 +97,13 @@ function returnBaseUrl(req) {
  * the browser submits later, so editing the URL or the form can't change
  * what gets charged.
  */
+/** What a Stripe payment carries back to the webhook: the staff charge, or the website's order number. */
+function stripeReference(session) {
+  if (session.ref) return { posRef: session.ref };
+  const orderNumber = orderNumberFrom(session.successUrl);
+  return orderNumber ? { orderNumber } : {};
+}
+
 router.get('/', pageRateLimiter, (req, res) => {
   const verification = verifyLink(req.query);
   if (!verification.valid) {
@@ -323,6 +330,7 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
         currency: session.currency,
         description: session.description
       });
+      await notifyWebsitePayment({ orderNumber: orderNumberFrom(session.successUrl), gateway: 'Nuvei', transactionId: transactionReference, amount: session.amount, currency: session.currency });
     }
 
     const successBase = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
@@ -397,7 +405,7 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
       description: session.description,
       successUrl,
       cancelUrl,
-      metadata: { contactId: session.contactId || '', description: session.description || '', ...(session.ref ? { posRef: session.ref } : {}) }
+      metadata: { contactId: session.contactId || '', description: session.description || '', ...stripeReference(session) }
     });
     return res.status(200).json({ url: checkoutSession.url });
   } catch (error) {

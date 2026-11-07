@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { constructWebhookEvent } = require('../services/stripeClient');
 const { notifyGHL } = require('../lib/ghlNotify');
-const { notifyPosResult } = require('../lib/posNotify');
+const { notifyPosResult, notifyWebsitePayment } = require('../lib/posNotify');
 const { resolveContactId } = require('../lib/ghlContact');
 
 // Stripe retries webhook delivery on any non-2xx response or timeout — this
@@ -78,6 +78,7 @@ router.post('/', async (req, res) => {
       }
 
       await notifyGHL(contactId, { transactionId, amount, currency, description });
+      await notifyWebsitePayment({ orderNumber: session.metadata?.orderNumber || '', gateway: 'Stripe', transactionId, amount, currency });
       console.log(`[Stripe Webhook] Payment confirmed — session=${session.id} amount=${amount} ${currency}`);
     }
   }

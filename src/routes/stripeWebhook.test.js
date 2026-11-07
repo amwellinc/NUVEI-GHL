@@ -193,3 +193,20 @@ describe('a staff charge paid by Stripe', () => {
     expect(ghlNotify.notifyGHL).not.toHaveBeenCalled();
   });
 });
+
+describe('a website Stripe payment', () => {
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; delete process.env.AMWELLINC_WEBSITE_PAID_URL; });
+  test('tells Admin the order was paid', async () => {
+    process.env.AMWELLINC_WEBSITE_PAID_URL = 'https://admin.example/api/webhooks/gateway-website';
+    const sent = [];
+    global.fetch = jest.fn(async (_u, o) => { sent.push(JSON.parse(o.body)); return { ok: true, status: 200 }; });
+    const event = checkoutCompletedEvent();
+    event.id = 'evt_site_1';
+    event.data.object.metadata = { ...event.data.object.metadata, orderNumber: 'W111-88' };
+    stripeClient.constructWebhookEvent.mockReturnValue(event);
+    await post(buildApp());
+    expect(sent[0]).toMatchObject({ orderNumber: 'W111-88', gateway: 'Stripe' });
+    expect(ghlNotify.notifyGHL).toHaveBeenCalled();
+  });
+});
