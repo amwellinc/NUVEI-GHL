@@ -10,7 +10,9 @@ const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 // "&successUrl=" in it) can shift field boundaries and make two different
 // tuples canonicalize to the same signed string.
 function canonicalize(params) {
-  return JSON.stringify(SIGNED_FIELDS.map((key) => params[key] ?? ''));
+  const fields = SIGNED_FIELDS.map((key) => params[key] ?? '');
+  // Only staff charges carry a ref: website links keep the exact signature they always had.
+  return JSON.stringify(params.ref ? [...fields, params.ref] : fields);
 }
 
 function sign(params) {
@@ -46,7 +48,8 @@ function createSignedLink(baseUrl, params) {
     successUrl: params.successUrl || '',
     failureUrl: params.failureUrl || '',
     contactId: params.contactId || '',
-    exp: String(Math.floor(Date.now() / 1000) + (params.ttlSeconds || DEFAULT_TTL_SECONDS))
+    exp: String(Math.floor(Date.now() / 1000) + (params.ttlSeconds || DEFAULT_TTL_SECONDS)),
+    ...(params.ref ? { ref: params.ref } : {})
   };
 
   const sig = sign(signed);
@@ -65,6 +68,7 @@ function verifyLink(query) {
 
   const signed = {};
   for (const key of SIGNED_FIELDS) signed[key] = query[key] ?? '';
+  if (query.ref) signed.ref = query.ref;
 
   let expected;
   try {

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { constructWebhookEvent } = require('../services/stripeClient');
 const { notifyGHL } = require('../lib/ghlNotify');
+const { notifyPosResult } = require('../lib/posNotify');
 const { resolveContactId } = require('../lib/ghlContact');
 
 // Stripe retries webhook delivery on any non-2xx response or timeout — this
@@ -58,6 +59,12 @@ router.post('/', async (req, res) => {
       const amount = (session.amount_total / 100).toFixed(2);
       const currency = (session.currency || 'usd').toUpperCase();
       const description = session.metadata?.description || '';
+
+      // A staff charge from Admin reports back to Admin, which records it. It adds no CRM note or tag here.
+      if (session.metadata?.posRef) {
+        await notifyPosResult({ ref: session.metadata.posRef, status: 'paid', gateway: 'Stripe', transactionId, amount, currency });
+        return res.status(200).json({ received: true });
+      }
 
       // The signed link's own contactId (set at link-creation time) wins
       // when present; Stripe's own hosted page always collects an email

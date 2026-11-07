@@ -637,3 +637,48 @@ describe('abandoned cart tracking', () => {
     expect(ghlMocks.addTags).toHaveBeenCalledWith('contact-charged', ['payment-completed']);
   });
 });
+
+describe('a staff charge from Admin (a link with a ref)', () => {
+  const card = { email: 'a@b.com', firstName: 'A', lastName: 'B', ccNumber: '4111111111111111', ccExpMonth: '12', ccExpYear: '2027', ccCvv: '123' };
+  const realFetch = global.fetch;
+  let sent;
+  beforeEach(() => {
+    process.env.AMWELLINC_CARD_RESULT_URL = 'https://admin.example/api/webhooks/gateway-card';
+    process.env.GATEWAY_API_KEY = 'k1';
+    sent = [];
+    global.fetch = jest.fn(async (_url, options) => { sent.push(JSON.parse(options.body)); return { ok: true, status: 200 }; });
+  });
+  afterEach(() => { global.fetch = realFetch; delete process.env.AMWELLINC_CARD_RESULT_URL; delete process.env.GATEWAY_API_KEY; });
+
+  async function sessionFor(app, params) {
+    const url = createSignedLink('http://x/pay', { amount: 25, ...params });
+    const res = await request(app).get('/pay?' + url.split('?')[1]);
+    return /\/([0-9a-f-]{36})\/charge/.exec(res.text)[1];
+  }
+
+  test('a paid charge reports to Admin and adds nothing to the CRM', async () => {
+    const app = buildApp();
+    mockSuccessfulSale('txn-9');
+    const id = await sessionFor(app, { ref: 'charge-ref-1' });
+    await request(app).post(`/pay/${id}/charge`).send(card).expect(200);
+    expect(sent).toEqual([{ ref: 'charge-ref-1', status: 'paid', gateway: 'Nuvei', transactionId: 'Nuvei/txn-9', amount: '25.00', currency: 'USD' }]);
+    expect(ghlMocks.createNote).not.toHaveBeenCalled();
+    expect(ghlMocks.addTags).not.toHaveBeenCalled();
+  });
+  test('a declined charge reports the decline, with no card details', async () => {
+    const app = buildApp();
+    NuveiClient.mockImplementation(() => ({ createPayment: jest.fn().mockRejectedValue({ message: 'Declined Transaction' }) }));
+    const id = await sessionFor(app, { ref: 'charge-ref-2' });
+    await request(app).post(`/pay/${id}/charge`).send(card);
+    expect(sent[0]).toMatchObject({ ref: 'charge-ref-2', status: 'failed', reason: 'Declined Transaction' });
+    expect(JSON.stringify(sent)).not.toContain('4111');
+  });
+  test('a website charge still goes to the CRM and reports nothing to Admin', async () => {
+    const app = buildApp();
+    mockSuccessfulSale('txn-10');
+    const id = await sessionFor(app, { contactId: 'contact-1' });
+    await request(app).post(`/pay/${id}/charge`).send(card).expect(200);
+    expect(sent).toEqual([]);
+    expect(ghlMocks.createNote).toHaveBeenCalled();
+  });
+});

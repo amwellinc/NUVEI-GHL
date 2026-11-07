@@ -174,3 +174,22 @@ describe('POST /pay/stripe/webhook', () => {
     expect(ghlNotify.notifyGHL).not.toHaveBeenCalled();
   });
 });
+
+describe('a staff charge paid by Stripe', () => {
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; delete process.env.AMWELLINC_CARD_RESULT_URL; });
+
+  test('reports to Admin and adds nothing to the CRM', async () => {
+    process.env.AMWELLINC_CARD_RESULT_URL = 'https://admin.example/api/webhooks/gateway-card';
+    const sent = [];
+    global.fetch = jest.fn(async (_u, o) => { sent.push(JSON.parse(o.body)); return { ok: true, status: 200 }; });
+    const event = checkoutCompletedEvent();
+    event.id = 'evt_pos_1';
+    event.data.object.metadata = { ...event.data.object.metadata, posRef: 'charge-ref-3' };
+    stripeClient.constructWebhookEvent.mockReturnValue(event);
+    const res = await post(buildApp());
+    expect(res.status).toBe(200);
+    expect(sent[0]).toMatchObject({ ref: 'charge-ref-3', status: 'paid', gateway: 'Stripe' });
+    expect(ghlNotify.notifyGHL).not.toHaveBeenCalled();
+  });
+});

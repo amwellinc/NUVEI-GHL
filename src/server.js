@@ -10,6 +10,7 @@ const payRoutes = require('./routes/pay');
 const stripeWebhookRoutes = require('./routes/stripeWebhook');
 const checkoutLinkRoutes = require('./routes/checkoutLink');
 const contactsLookupRoutes = require('./routes/contactsLookup');
+const posRoutes = require('./routes/pos');
 const { requireApiKey } = require('./lib/security');
 const ghlWebhookRoutes = require('./routes/ghlWebhook');
 
@@ -78,6 +79,7 @@ app.use('/api/payments', requireApiKey, paymentRoutes);
 app.use('/api/ghl', requireApiKey, ghlRoutes);
 app.use('/oauth', oauthRoutes);
 app.use('/ghl-provider', ghlProviderRoutes);
+app.use('/pos/links', requireApiKey, posRoutes);
 app.use('/pay/create-link', checkoutLinkRoutes);
 app.use('/pay', payRoutes);
 app.use('/contacts/lookup', contactsLookupRoutes);

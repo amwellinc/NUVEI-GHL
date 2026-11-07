@@ -58,7 +58,8 @@ function getAllowedRedirectOrigins() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .concat(process.env.APP_URL ? [process.env.APP_URL] : []);
+    .concat(process.env.APP_URL ? [process.env.APP_URL] : [])
+    .concat(process.env.POS_RETURN_ORIGIN ? [process.env.POS_RETURN_ORIGIN] : []);
 }
 
 /**

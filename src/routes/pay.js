@@ -5,6 +5,7 @@ const NuveiClient = require('../services/nuveiClient');
 const { createCheckoutSession } = require('../services/stripeClient');
 const { verifyLink } = require('../lib/paymentLinks');
 const { notifyGHL, notifyAbandonedCart } = require('../lib/ghlNotify');
+const { notifyPosResult } = require('../lib/posNotify');
 const { resolveContactId } = require('../lib/ghlContact');
 const { escapeHtml, createRateLimiter, redactErrorDetails, isAllowedRedirect, getAllowedRedirectOrigins } = require('../lib/security');
 const { REGION_SELECTOR_STYLES } = require('../lib/checkoutStyles');
@@ -103,9 +104,9 @@ router.get('/', pageRateLimiter, (req, res) => {
   }
 
   cleanExpiredSessions();
-  const { amount, currency, description, successUrl, failureUrl, contactId } = verification.params;
+  const { amount, currency, description, successUrl, failureUrl, contactId, ref } = verification.params;
   const sessionId = crypto.randomUUID();
-  sessions.set(sessionId, { amount, currency, description, successUrl, failureUrl, contactId, createdAt: Date.now() });
+  sessions.set(sessionId, { amount, currency, description, successUrl, failureUrl, contactId, ref, createdAt: Date.now() });
 
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
   res.setHeader('X-Frame-Options', 'DENY');
@@ -305,18 +306,24 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     // Now" link) — the card form always collects an email, so resolve one
     // now if we don't already have it, rather than losing the order/GHL
     // tie-in entirely.
-    const contactId = session.contactId || (await resolveContactId(email, firstName, lastName));
+    // A staff charge from Admin reports back to Admin, which records it. It adds no CRM note or tag here.
+    if (session.ref) {
+      await notifyPosResult({ ref: session.ref, status: 'paid', gateway: 'Nuvei', transactionId: transactionReference, amount: session.amount, currency: session.currency });
+    }
+    const contactId = session.ref ? null : session.contactId || (await resolveContactId(email, firstName, lastName));
 
     // notifyGHL never throws (each GHL call is independently try/caught
     // internally) — the charge already succeeded, so a GHL-side hiccup here
     // must never turn into a failure response for a payment that went
     // through.
-    await notifyGHL(contactId, {
-      transactionId: transactionReference,
-      amount: session.amount,
-      currency: session.currency,
-      description: session.description
-    });
+    if (!session.ref) {
+      await notifyGHL(contactId, {
+        transactionId: transactionReference,
+        amount: session.amount,
+        currency: session.currency,
+        description: session.description
+      });
+    }
 
     const successBase = isAllowedRedirect(session.successUrl, ALLOWED_REDIRECT_ORIGINS)
       ? session.successUrl
@@ -330,6 +337,9 @@ router.post('/:sessionId/charge', chargeRateLimiter, async (req, res) => {
     return res.status(200).json({ redirectUrl: successUrl });
   } catch (error) {
     console.error('[Pay Link] Charge failed:', error.message, redactErrorDetails(error.details));
+    if (session.ref) {
+      await notifyPosResult({ ref: session.ref, status: 'failed', gateway: 'Nuvei', amount: session.amount, currency: session.currency, reason: String(error.message || 'Declined').slice(0, 120) });
+    }
 
     // A gateway decline is a definite "payment failed" outcome (as opposed
     // to the Stripe leg's cancelUrl, which only fires on genuine
@@ -387,7 +397,7 @@ router.post('/:sessionId/stripe-checkout', chargeRateLimiter, async (req, res) =
       description: session.description,
       successUrl,
       cancelUrl,
-      metadata: { contactId: session.contactId || '', description: session.description || '' }
+      metadata: { contactId: session.contactId || '', description: session.description || '', ...(session.ref ? { posRef: session.ref } : {}) }
     });
     return res.status(200).json({ url: checkoutSession.url });
   } catch (error) {
