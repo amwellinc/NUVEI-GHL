@@ -228,6 +228,31 @@ router.get('/checkout', (req, res) => {
       return whiteLabelOrigins.indexOf(origin) !== -1;
     }
 
+    // Temporary diagnostic: tells the server which GHL messages arrive and
+    // which fields they carry, so the CRM "Charge a Card" flow can be compared
+    // with client invoices. Sends field names and presence flags only, never
+    // field values. Remove once that flow is understood.
+    const reportedShapes = {};
+    function reportMessageShape(data, trusted) {
+      if (!data || typeof data !== 'object' || !data.type) return;
+      const keys = Object.keys(data);
+      const signature = data.type + ':' + keys.join(',');
+      if (reportedShapes[signature]) return;
+      reportedShapes[signature] = true;
+      fetch('/ghl-provider/client-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: data.type,
+          mode: data.mode,
+          trusted: trusted,
+          keys: keys,
+          hasTransactionId: !!data.transactionId,
+          hasOrderId: !!data.orderId
+        })
+      }).catch(function () {});
+    }
+
     window.addEventListener('message', function (event) {
       // GHL (and this page's own retry loop, above) sends postMessage
       // payloads as JSON strings, not raw objects — parse defensively so a
@@ -238,6 +263,7 @@ router.get('/checkout', (req, res) => {
         try { data = JSON.parse(data); } catch (e) { data = {}; }
       }
       const trusted = isTrustedGHLOrigin(event.origin);
+      reportMessageShape(data, trusted);
       if (!trusted) return;
       if (data.type === 'payment_initiate_props') {
         paymentProps = data;
@@ -449,6 +475,7 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
   // and — critically — is the identifier the amount check below is keyed on.
   // Without it /query cannot reconcile either, so it is required up front.
   if (!transactionId) {
+    console.warn('[GHL Charge refused] missing: transactionId');
     return res.status(400).json({ error: 'Missing transactionId' });
   }
 
@@ -456,15 +483,20 @@ router.post('/charge', chargeRateLimiter, async (req, res) => {
   // GHL's own transaction record below (identifies which GHL account/OAuth
   // token to look it up with).
   if (!locationId) {
+    console.warn('[GHL Charge refused] missing: locationId');
     return res.status(400).json({ error: 'Missing locationId' });
   }
 
   if (!amount || !ccNumber || !ccExpMonth || !ccExpYear || !ccCvv) {
+    // Field names only: never the values.
+    const missing = ['amount', 'ccNumber', 'ccExpMonth', 'ccExpYear', 'ccCvv'].filter((f) => !req.body?.[f]);
+    console.warn(`[GHL Charge refused] missing: ${missing.join(', ')}`);
     return res.status(400).json({ error: 'Missing required payment fields' });
   }
 
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    console.warn('[GHL Charge refused] invalid amount');
     return res.status(400).json({ error: 'Invalid amount' });
   }
 
@@ -630,7 +662,34 @@ router.post('/stripe-confirm', chargeRateLimiter, async (req, res) => {
   }
 });
 
+// Temporary diagnostic (see reportMessageShape in the checkout page). This
+// endpoint is unauthenticated, so everything logged is reduced to short safe
+// tokens: nothing else in the body can reach the logs or forge a log line.
+const clientEventRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 60 });
+const SAFE_TOKEN = /^[A-Za-z0-9_.-]{1,40}$/;
+const MAX_LOGGED_KEYS = 40;
+
+function safeToken(value) {
+  return typeof value === 'string' && SAFE_TOKEN.test(value) ? value : '(none)';
+}
+
+function safeKeys(keys) {
+  if (!Array.isArray(keys)) return '';
+  return keys.filter((k) => typeof k === 'string' && SAFE_TOKEN.test(k)).slice(0, MAX_LOGGED_KEYS).join(',');
+}
+
+router.post('/client-event', clientEventRateLimiter, (req, res) => {
+  const { type, mode, trusted, keys, hasTransactionId, hasOrderId } = req.body || {};
+  console.log(
+    `[GHL Message] type=${safeToken(type)} mode=${safeToken(mode)} trusted=${trusted === true} ` +
+    `hasTransactionId=${hasTransactionId === true} hasOrderId=${hasOrderId === true} keys=${safeKeys(keys)}`
+  );
+  res.status(204).end();
+});
+
 router.post('/query', (req, res) => {
+  console.log(`[GHL Query] type=${safeToken(req.body?.type)} keys=${safeKeys(Object.keys(req.body || {}))}`);
+
   const { type, apiKey, chargeId, transactionId } = req.body;
   const mode = verifyApiKey(apiKey, 'live') ? 'live' : verifyApiKey(apiKey, 'test') ? 'test' : null;
 

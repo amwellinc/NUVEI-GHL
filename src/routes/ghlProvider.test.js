@@ -844,3 +844,83 @@ describe('POST /ghl-provider/stripe-confirm', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GHL message diagnostics', () => {
+  test('checkout page reports the shape of each GHL message, without sending any values', async () => {
+    const res = await request(buildApp()).get('/ghl-provider/checkout');
+    expect(res.text).toContain("fetch('/ghl-provider/client-event'");
+    expect(res.text).toContain('Object.keys(data)');
+    expect(res.text).not.toContain('JSON.stringify(data)');
+  });
+
+  test('POST /client-event logs only allowlisted shape fields, never arbitrary values', async () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const res = await request(buildApp()).post('/ghl-provider/client-event').send({
+      type: 'payment_initiate_props',
+      mode: 'payment',
+      trusted: true,
+      keys: ['type', 'amount', 'bad key\nFAKE LOG LINE'],
+      hasTransactionId: false,
+      hasOrderId: true,
+      ccNumber: '4111111111111111',
+      contact: { email: 'someone@example.com' }
+    });
+    const logged = logSpy.mock.calls.flat().join(' ');
+    logSpy.mockRestore();
+
+    expect(res.status).toBe(204);
+    expect(logged).toContain('type=payment_initiate_props');
+    expect(logged).toContain('mode=payment');
+    expect(logged).toContain('hasTransactionId=false');
+    expect(logged).toContain('keys=type,amount');
+    expect(logged).not.toContain('FAKE LOG LINE');
+    expect(logged).not.toContain('4111111111111111');
+    expect(logged).not.toContain('someone@example.com');
+  });
+
+  test('POST /query logs the request type and field names, but never the apiKey value', async () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    await request(buildApp()).post('/ghl-provider/query').send({
+      type: 'list_payment_methods',
+      apiKey: 'super-secret-value',
+      contactId: 'contact_123'
+    });
+    const logged = logSpy.mock.calls.flat().join(' ');
+    logSpy.mockRestore();
+
+    expect(logged).toContain('type=list_payment_methods');
+    expect(logged).toContain('contactId');
+    expect(logged).not.toContain('super-secret-value');
+    expect(logged).not.toContain('contact_123');
+  });
+});
+
+describe('POST /charge explains a refusal in the log, without card details', () => {
+  const express = require('express');
+  const supertest = require('supertest');
+  const router = require('./ghlProvider');
+  const app = express();
+  app.use(express.json());
+  app.use('/ghl-provider', router);
+  let warn;
+  beforeEach(() => { warn = jest.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { warn.mockRestore(); });
+
+  it('names the missing fields', async () => {
+    await supertest(app).post('/ghl-provider/charge').send({ transactionId: 'tx1', locationId: 'loc1', amount: 10, ccNumber: '4111111111111111' }).expect(400);
+    const line = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(line).toMatch(/\[GHL Charge refused\]/);
+    expect(line).toMatch(/ccExpMonth/);
+    expect(line).toMatch(/ccCvv/);
+  });
+  it('never logs a card number or CVV', async () => {
+    await supertest(app).post('/ghl-provider/charge').send({ transactionId: 'tx1', locationId: 'loc1', ccNumber: '4111111111111111', ccCvv: '123' }).expect(400);
+    const line = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(line).not.toContain('4111111111111111');
+    expect(line).not.toContain(' 123');
+  });
+  it('names a missing transaction id', async () => {
+    await supertest(app).post('/ghl-provider/charge').send({}).expect(400);
+    expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(/transactionId/);
+  });
+});
