@@ -697,6 +697,11 @@ router.post('/query', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  // The CRM asks this whenever its Charge a Card box opens. No cards are saved, so the answer is an empty list.
+  if (type === 'list_payment_methods') {
+    return res.status(200).json([]);
+  }
+
   if (type !== 'verify') {
     return res.status(501).json({ error: `queryUrl type "${type}" is not implemented in Phase 1` });
   }

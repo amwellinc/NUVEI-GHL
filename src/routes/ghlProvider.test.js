@@ -399,6 +399,13 @@ describe('POST /ghl-provider/query', () => {
     expect(res.body).toEqual({ success: false });
   });
 
+  test('type=list_payment_methods answers with an empty list, because no cards are saved', async () => {
+    verifyApiKey.mockReturnValue(true);
+    const res = await request(buildApp()).post('/ghl-provider/query').send({ type: 'list_payment_methods', apiKey: 'ok', locationId: 'l', contactId: 'c' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
   test('an out-of-scope type (e.g. charge_payment) is cleanly rejected with 501, not silently mishandled', async () => {
     verifyApiKey.mockReturnValue(true);
     const res = await request(buildApp()).post('/ghl-provider/query').send({ type: 'charge_payment', apiKey: 'ok' });
