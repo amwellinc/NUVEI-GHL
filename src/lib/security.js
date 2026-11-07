@@ -102,4 +102,18 @@ function createRateLimiter({ windowMs, max }) {
   };
 }
 
-module.exports = { escapeHtml, redactErrorDetails, timingSafeEqual, isAllowedRedirect, createRateLimiter, getAllowedRedirectOrigins };
+/**
+ * Routes only our own servers may call. The key comes from GATEWAY_API_KEY; with none set,
+ * nobody gets in, so a missing setting can never leave payment or contact routes open.
+ */
+function requireApiKey(req, res, next) {
+  const expected = process.env.GATEWAY_API_KEY || '';
+  const header = req.headers.authorization || '';
+  const given = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+  if (!expected || !given || !timingSafeEqual(given, expected)) {
+    return res.status(401).json({ error: 'Not allowed' });
+  }
+  next();
+}
+
+module.exports = { requireApiKey, escapeHtml, redactErrorDetails, timingSafeEqual, isAllowedRedirect, createRateLimiter, getAllowedRedirectOrigins };

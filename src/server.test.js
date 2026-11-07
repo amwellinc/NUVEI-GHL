@@ -35,3 +35,25 @@ describe('server.js (app configuration)', () => {
     expect(res.headers['x-frame-options']).toBeUndefined();
   });
 });
+
+describe('private API routes need the gateway key', () => {
+  const app = require('./server');
+  it.each([
+    ['post', '/api/payments/create'],
+    ['post', '/api/payments/refund'],
+    ['post', '/api/payments/void'],
+    ['get', '/api/payments/abc'],
+    ['get', '/api/ghl/status'],
+    ['get', '/api/ghl/contacts'],
+    ['post', '/api/ghl/payment/create'],
+    ['post', '/api/ghl/payment/refund'],
+    ['post', '/api/ghl/company/associate'],
+  ])('%s %s refuses a call with no key', async (method, path) => {
+    await require('supertest')(app)[method](path).expect(401);
+  });
+  it('the public checkout and health routes stay open', async () => {
+    await require('supertest')(app).get('/api/health').expect(200);
+    const res = await require('supertest')(app).post('/pay/create-link').send({});
+    expect(res.status).not.toBe(401);
+  });
+});
